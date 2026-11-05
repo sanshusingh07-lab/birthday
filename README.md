@@ -120,6 +120,35 @@ Open `http://127.0.0.1:5173` in your browser.
 
 ---
 
+## 🚀 Deploying to Render
+
+This project is fully configured for zero-friction 1-click deployment on Render using the included `render.yaml` blueprint and `build.sh` script.
+
+### Method 1: Using Render Blueprint (Recommended)
+1. Push your repository to **GitHub** or **GitLab**:
+   ```bash
+   git remote add origin https://github.com/<your-username>/<your-repo-name>.git
+   git push -u origin main
+   ```
+2. Log in to [Render](https://render.com) and click **"New +"** -> **"Blueprint"**.
+3. Select your repository.
+4. Render will automatically detect `render.yaml` and configure:
+   - **Build Command**: `chmod +x build.sh && ./build.sh`
+   - **Start Command**: `cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT`
+5. Click **"Apply"** — in ~2 minutes your full-stack app will be live with free SSL!
+
+### Method 2: Manual Web Service Setup on Render
+1. Create a **New Web Service** on Render and connect your repository.
+2. Configure settings:
+   - **Environment**: `Python`
+   - **Region**: Choose closest to you (e.g. `Oregon` or `Frankfurt`)
+   - **Branch**: `main`
+   - **Build Command**: `chmod +x build.sh && ./build.sh`
+   - **Start Command**: `cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT`
+3. Click **"Create Web Service"**.
+
+---
+
 ## 📡 API Endpoints
 
 | Method | Endpoint | Description |

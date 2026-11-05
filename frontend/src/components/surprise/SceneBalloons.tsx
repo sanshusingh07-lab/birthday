@@ -83,7 +83,7 @@ export const SceneBalloons: React.FC<SceneBalloonsProps> = ({ wishes, recipientN
 
   return (
     <div className="min-h-[85vh] flex flex-col items-center justify-center px-4 py-8 text-center relative z-10 max-w-4xl mx-auto">
-      {/* Title Header matching reference video */}
+      {/* Title Header */}
       <motion.div
         initial={{ opacity: 0, y: -15 }}
         animate={{ opacity: 1, y: 0 }}
@@ -105,12 +105,13 @@ export const SceneBalloons: React.FC<SceneBalloonsProps> = ({ wishes, recipientN
       </motion.div>
 
       {/* Floating 3D Balloons Area */}
-      <div className="relative min-h-[260px] w-full flex items-center justify-center gap-6 sm:gap-12 flex-wrap mb-10">
+      <div className="relative min-h-[300px] w-full flex items-center justify-center gap-6 sm:gap-12 flex-wrap mb-10">
         {displayWishes.map((w, index) => {
           const isPopped = poppedIndices.includes(index);
           const theme = BALLOON_THEMES[index % BALLOON_THEMES.length];
           const delayOffset = (index % 3) * 0.4;
-          const heightOffset = index % 2 === 0 ? -15 : 15;
+          // Stagger heights: alternate balloons sit higher/lower
+          const heightOffset = index % 2 === 0 ? -18 : 12;
 
           return (
             <div key={index} className="flex flex-col items-center">
@@ -122,13 +123,13 @@ export const SceneBalloons: React.FC<SceneBalloonsProps> = ({ wishes, recipientN
                     animate={{
                       scale: 1,
                       opacity: 1,
-                      y: [heightOffset - 10, heightOffset + 12, heightOffset - 10],
+                      y: [heightOffset - 12, heightOffset + 14, heightOffset - 12],
                       rotate: index % 2 === 0 ? [-3, 3, -3] : [3, -3, 3]
                     }}
                     exit={{
-                      scale: [1, 1.3, 0],
+                      scale: [1, 1.35, 0],
                       opacity: 0,
-                      transition: { duration: 0.2 }
+                      transition: { duration: 0.22 }
                     }}
                     transition={{
                       y: {
@@ -144,81 +145,131 @@ export const SceneBalloons: React.FC<SceneBalloonsProps> = ({ wishes, recipientN
                         delay: delayOffset
                       }
                     }}
-                    whileHover={{ scale: 1.12, y: heightOffset - 8 }}
-                    whileTap={{ scale: 0.92 }}
+                    whileHover={{
+                      scale: 1.14,
+                      y: heightOffset - 10,
+                      filter: `drop-shadow(0 0 20px ${theme.glow})`
+                    }}
+                    whileTap={{ scale: 0.9 }}
                     onClick={e => handlePopBalloon(index, e)}
                     className="relative cursor-pointer select-none group flex flex-col items-center"
                     title="Click to pop!"
                   >
-                    {/* Realistic 3D Balloon SVG matching user reference video */}
+                    {/* ====== REALISTIC 3D BALLOON SVG ====== */}
                     <svg
-                      width="120"
-                      height="200"
-                      viewBox="0 0 100 170"
-                      className="overflow-visible filter drop-shadow-[0_12px_24px_rgba(0,0,0,0.35)]"
+                      width="130"
+                      height="190"
+                      viewBox="0 0 100 160"
+                      className="overflow-visible"
+                      style={{
+                        filter: `drop-shadow(0 8px 20px rgba(0,0,0,0.3)) drop-shadow(0 0 12px ${theme.glow})`
+                      }}
                     >
                       <defs>
-                        {/* Radial 3D sphere gradient */}
+                        {/* 3D radial gradient: bright highlight upper-left, dark shade lower-right */}
                         <radialGradient
                           id={`balloonGrad-${index}`}
-                          cx="35%"
-                          cy="35%"
-                          r="65%"
-                          fx="30%"
-                          fy="30%"
+                          cx="38%"
+                          cy="32%"
+                          r="62%"
+                          fx="32%"
+                          fy="28%"
                         >
-                          <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.8" />
-                          <stop offset="25%" stopColor={theme.gradStart} />
-                          <stop offset="85%" stopColor={theme.gradEnd} />
-                          <stop offset="100%" stopColor="#000000" stopOpacity="0.4" />
+                          <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.75" />
+                          <stop offset="20%" stopColor={theme.gradStart} stopOpacity="1" />
+                          <stop offset="70%" stopColor={theme.gradEnd} stopOpacity="1" />
+                          <stop offset="100%" stopColor="#000000" stopOpacity="0.35" />
+                        </radialGradient>
+
+                        {/* Specular highlight gradient */}
+                        <radialGradient id={`specular-${index}`} cx="50%" cy="50%" r="50%">
+                          <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.7" />
+                          <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
                         </radialGradient>
                       </defs>
 
-                      {/* Realistic Teardrop / Oval Balloon Body */}
+                      {/*
+                        PROPER EGG / OVAL BALLOON BODY
+                        - Wider at the upper portion (~y 30-60)
+                        - Narrows to a small tip at the bottom (~y 120)
+                        - Smooth curves all around — NO flat edges
+                        viewBox is 0 0 100 160; balloon body occupies roughly 5,8 to 95,122
+                      */}
                       <path
-                        d="M 50 5 
-                           C 22 5 3 30 3 66 
-                           C 3 105 35 136 45 144 
-                           L 43 149 
-                           L 57 149 
-                           L 55 144 
-                           C 65 136 97 105 97 66 
-                           C 97 30 78 5 50 5 Z"
+                        d={`
+                          M 50 8
+                          C 75 8,  95 28,  95 55
+                          C 95 82,  75 112, 55 122
+                          Q 50 125, 45 122
+                          C 25 112,  5 82,   5 55
+                          C  5 28,  25  8,  50  8
+                          Z
+                        `}
                         fill={`url(#balloonGrad-${index})`}
                         stroke={theme.borderGlow}
-                        strokeWidth="1"
+                        strokeWidth="0.8"
                       />
 
-                      {/* Specular curved reflection highlight on top-left */}
+                      {/* Specular highlight — white ellipse on upper-left portion */}
                       <ellipse
-                        cx="32"
-                        cy="36"
-                        rx="9"
+                        cx="35"
+                        cy="38"
+                        rx="12"
                         ry="18"
-                        transform="rotate(-28 32 36)"
-                        fill="#FFFFFF"
-                        opacity="0.55"
+                        transform="rotate(-25 35 38)"
+                        fill={`url(#specular-${index})`}
+                        opacity="0.65"
                       />
-                      <circle cx="26" cy="62" r="3.5" fill="#FFFFFF" opacity="0.35" />
 
-                      {/* Tied Knot at bottom of balloon */}
+                      {/* Secondary small specular dot */}
+                      <circle
+                        cx="28"
+                        cy="60"
+                        r="4"
+                        fill="#FFFFFF"
+                        opacity="0.25"
+                      />
+
+                      {/* Tied knot at bottom center — small triangle nub */}
                       <polygon
-                        points="46,145 54,145 58,151 42,151"
+                        points="47,122 53,122 56,129 44,129"
+                        fill={theme.gradEnd}
+                      />
+                      {/* Tiny knot circle */}
+                      <circle
+                        cx="50"
+                        cy="130"
+                        r="2"
                         fill={theme.gradEnd}
                       />
 
-                      {/* Organic Wavy Balloon String Dangling Down */}
+                      {/* Thin curvy string hanging down from knot */}
                       <path
-                        d="M 50,151 Q 45,175 55,200 T 47,235"
-                        stroke="rgba(255, 255, 255, 0.45)"
-                        strokeWidth="1.5"
+                        d="M 50,132 Q 44,142 52,152 T 48,168"
+                        stroke="rgba(255, 255, 255, 0.4)"
+                        strokeWidth="1.2"
                         fill="none"
                         strokeLinecap="round"
                       />
+
+                      {/* Number label on balloon */}
+                      <text
+                        x="50"
+                        y="56"
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        fill="rgba(255,255,255,0.85)"
+                        fontSize="18"
+                        fontWeight="800"
+                        fontFamily="serif"
+                        style={{ textShadow: '0 1px 3px rgba(0,0,0,0.3)' }}
+                      >
+                        #{index + 1}
+                      </text>
                     </svg>
 
-                    {/* Cute hover pill */}
-                    <span className="absolute top-1/2 -translate-y-1/2 text-[10px] font-bold text-white uppercase tracking-widest bg-black/30 backdrop-blur-xs px-2.5 py-0.5 rounded-full pointer-events-none group-hover:scale-110 transition-transform">
+                    {/* "POP ME!" pill overlay on balloon */}
+                    <span className="absolute top-[42%] -translate-y-1/2 text-[9px] font-extrabold text-white uppercase tracking-[0.15em] bg-black/25 backdrop-blur-sm px-2.5 py-0.5 rounded-full pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-200">
                       POP ME!
                     </span>
                   </motion.div>
@@ -240,7 +291,7 @@ export const SceneBalloons: React.FC<SceneBalloonsProps> = ({ wishes, recipientN
         })}
       </div>
 
-      {/* Revealed Reason Cards (Exact match to reference video vid1_frame_3.jpg) */}
+      {/* Revealed Reason Cards */}
       <div className="w-full max-w-xl mx-auto space-y-3 mb-8">
         {displayWishes.map((w, idx) => {
           const isPopped = poppedIndices.includes(idx);
