@@ -1,12 +1,27 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, Sparkles, Edit3, Image as ImageIcon, Mail, Gift, Music, Play, Pause } from 'lucide-react';
+import { 
+  ArrowLeft, 
+  Sparkles, 
+  Edit3, 
+  Image as ImageIcon, 
+  Mail, 
+  Gift, 
+  Music, 
+  Play, 
+  Pause, 
+  Mic, 
+  Palette, 
+  Lock, 
+  ShieldCheck 
+} from 'lucide-react';
 import { useBirthday } from '../../context/BirthdayContext';
 import { sound, MUSIC_TRACKS, MusicTrackId } from '../../utils/audio';
 
 export const StepReview: React.FC = () => {
   const {
     formData,
+    updateFormData,
     goToStep,
     prevStep,
     submitSurprise,
@@ -19,12 +34,15 @@ export const StepReview: React.FC = () => {
     toggleMusic
   } = useBirthday();
 
+  const [enablePassword, setEnablePassword] = useState<boolean>(Boolean(formData.password));
+  const [passwordValue, setPasswordValue] = useState<string>(formData.password || '');
+
   const handleCreateMagic = async () => {
     sound.playFanfare();
     try {
       await submitSurprise();
     } catch (e) {
-      // error is handled in context
+      // error handled in context
     }
   };
 
@@ -36,6 +54,7 @@ export const StepReview: React.FC = () => {
   };
 
   const filledWishes = formData.wishes.filter(w => w.answer && w.answer.trim().length > 0);
+  const hasVoice = Boolean(formData.voice_message?.audio_url);
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
@@ -44,14 +63,14 @@ export const StepReview: React.FC = () => {
         <button
           type="button"
           onClick={prevStep}
-          className="flex items-center gap-1.5 text-sm font-medium text-[#38251F]/70 hover:text-[#E85B32] transition-colors"
+          className="flex items-center gap-1.5 text-sm font-medium text-[#38251F]/70 hover:text-[#E85B32] transition-colors cursor-pointer"
         >
           <ArrowLeft className="w-4 h-4" />
-          <span>Back</span>
+          <span>Back to Theme Studio</span>
         </button>
 
         <div className="flex items-center gap-2">
-          <span className="text-xs font-bold text-[#E85B32] uppercase tracking-wider">Step 5 of 5</span>
+          <span className="text-xs font-bold text-[#E85B32] uppercase tracking-wider">Step 7 of 7</span>
           <div className="w-24 h-2 bg-[#FFBFA8]/40 rounded-full overflow-hidden">
             <div className="w-full h-full bg-[#E85B32] rounded-full" />
           </div>
@@ -62,13 +81,13 @@ export const StepReview: React.FC = () => {
       <div className="text-center mb-8">
         <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#FFBFA8]/30 border border-[#FFBFA8] text-xs font-semibold text-[#E85B32] mb-3">
           <Sparkles className="w-3.5 h-3.5" />
-          <span>Almost There</span>
+          <span>Almost Ready</span>
         </div>
         <h2 className="font-serif text-3xl sm:text-4xl font-bold text-[#38251F]">
           Review Your Birthday Surprise ✨
         </h2>
         <p className="text-sm text-[#38251F]/70 mt-1 max-w-md mx-auto">
-          Take a look at what you created and choose the background music before we weave it into a magical experience.
+          Review your personalized creations, set access protection, and generate the magical surprise.
         </p>
       </div>
 
@@ -84,7 +103,7 @@ export const StepReview: React.FC = () => {
         <div className="p-6 rounded-3xl bg-white/90 border border-[#FFBFA8]/70 shadow-xs relative">
           <button
             onClick={() => goToStep(2)}
-            className="absolute top-6 right-6 p-2 rounded-full hover:bg-[#FFBFA8]/30 text-[#E85B32] transition-colors"
+            className="absolute top-6 right-6 p-2 rounded-full hover:bg-[#FFBFA8]/30 text-[#E85B32] transition-colors cursor-pointer"
             title="Edit Information"
           >
             <Edit3 className="w-4 h-4" />
@@ -114,18 +133,84 @@ export const StepReview: React.FC = () => {
           </div>
         </div>
 
-        {/* 2. Background Music Selection */}
+        {/* 2. Custom Theme Card */}
+        <div className="p-6 rounded-3xl bg-white/90 border border-[#FFBFA8]/70 shadow-xs relative">
+          <button
+            onClick={() => goToStep(7)}
+            className="absolute top-6 right-6 p-2 rounded-full hover:bg-[#FFBFA8]/30 text-[#E85B32] transition-colors cursor-pointer"
+            title="Edit Theme"
+          >
+            <Edit3 className="w-4 h-4" />
+          </button>
+
+          <h3 className="text-xs font-bold uppercase tracking-wider text-[#E85B32] mb-3 flex items-center gap-1.5">
+            <Palette className="w-3.5 h-3.5" /> Theme & Atmosphere
+          </h3>
+
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div>
+              <p className="font-serif font-bold text-base text-[#38251F] capitalize">
+                {formData.custom_theme?.theme_name.replace('-', ' ') || 'Dark Galaxy'}
+              </p>
+              <p className="text-xs text-[#38251F]/60">
+                Font: {formData.custom_theme?.heading_font} • Background: {formData.custom_theme?.background_type}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="w-6 h-6 rounded-full border border-black/10 shadow-xs" style={{ background: formData.custom_theme?.primary_color }} title="Primary" />
+              <span className="w-6 h-6 rounded-full border border-black/10 shadow-xs" style={{ background: formData.custom_theme?.secondary_color }} title="Secondary" />
+              <span className="w-6 h-6 rounded-full border border-black/10 shadow-xs" style={{ background: formData.custom_theme?.background_color }} title="Background" />
+              <span className="w-6 h-6 rounded-full border border-black/10 shadow-xs" style={{ background: formData.custom_theme?.accent_color }} title="Accent" />
+            </div>
+          </div>
+        </div>
+
+        {/* 3. Voice Note Card */}
+        <div className="p-6 rounded-3xl bg-white/90 border border-[#FFBFA8]/70 shadow-xs relative">
+          <button
+            onClick={() => goToStep(6)}
+            className="absolute top-6 right-6 p-2 rounded-full hover:bg-[#FFBFA8]/30 text-[#E85B32] transition-colors cursor-pointer"
+            title="Edit Voice Message"
+          >
+            <Edit3 className="w-4 h-4" />
+          </button>
+
+          <h3 className="text-xs font-bold uppercase tracking-wider text-[#E85B32] mb-2 flex items-center gap-1.5">
+            <Mic className="w-3.5 h-3.5" /> Personal Voice Message
+          </h3>
+
+          {hasVoice ? (
+            <div className="flex items-center justify-between bg-[#FFF6F0] p-3 rounded-2xl border border-[#FFBFA8]">
+              <div>
+                <p className="text-xs font-bold text-[#38251F]">
+                  {formData.voice_message?.title || 'Voice Note Recorded'}
+                </p>
+                <p className="text-[11px] text-[#38251F]/60">
+                  Duration: {Math.round(formData.voice_message?.duration || 0)}s
+                </p>
+              </div>
+              <span className="text-xs font-bold px-3 py-1 rounded-full bg-emerald-100 text-emerald-800">
+                Ready to play 🎙️
+              </span>
+            </div>
+          ) : (
+            <p className="text-xs text-gray-400 italic">No voice message recorded (optional).</p>
+          )}
+        </div>
+
+        {/* 4. Background Music */}
         <div className="p-6 rounded-3xl bg-white/90 border border-[#FFBFA8]/70 shadow-xs relative">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-xs font-bold uppercase tracking-wider text-[#E85B32] flex items-center gap-1.5">
-              <Music className="w-3.5 h-3.5" /> Choose Background Music
+              <Music className="w-3.5 h-3.5" /> Background Music Track
             </h3>
             <button
               onClick={toggleMusic}
-              className="text-xs font-semibold px-3 py-1 rounded-full bg-[#FFBFA8]/30 hover:bg-[#FFBFA8]/50 text-[#E85B32] transition-colors flex items-center gap-1"
+              className="text-xs font-semibold px-3 py-1 rounded-full bg-[#FFBFA8]/30 hover:bg-[#FFBFA8]/50 text-[#E85B32] transition-colors flex items-center gap-1 cursor-pointer"
             >
               {audioPlaying ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-              <span>{audioPlaying ? "Pause Preview" : "Listen Preview"}</span>
+              <span>{audioPlaying ? "Pause Track" : "Preview Track"}</span>
             </button>
           </div>
 
@@ -161,11 +246,59 @@ export const StepReview: React.FC = () => {
           </div>
         </div>
 
-        {/* 3. Balloon Questions Card */}
+        {/* 5. Access Security & Password Protection */}
+        <div className="p-6 rounded-3xl bg-white/90 border border-[#FFBFA8]/70 shadow-xs relative">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-[#E85B32] mb-3 flex items-center gap-1.5">
+            <ShieldCheck className="w-3.5 h-3.5" /> Access & Password Protection
+          </h3>
+
+          <div className="space-y-3">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={enablePassword}
+                onChange={(e) => {
+                  setEnablePassword(e.target.checked);
+                  if (!e.target.checked) {
+                    setPasswordValue('');
+                    updateFormData({ password: '', visibility: 'unlisted' });
+                  }
+                }}
+                className="w-4 h-4 rounded-sm text-[#E85B32] accent-[#E85B32]"
+              />
+              <span className="text-xs font-bold text-[#38251F]">
+                Protect this surprise with a Secret Passcode (Recipient must enter code)
+              </span>
+            </label>
+
+            {enablePassword && (
+              <div className="pl-7">
+                <input
+                  type="text"
+                  value={passwordValue}
+                  onChange={(e) => {
+                    setPasswordValue(e.target.value);
+                    updateFormData({ 
+                      password: e.target.value,
+                      visibility: e.target.value ? 'password_protected' : 'unlisted'
+                    });
+                  }}
+                  placeholder="Enter secret code (e.g. maya2026)"
+                  className="w-full max-w-sm px-4 py-2 rounded-xl bg-[#FFF6F0] border border-[#FFBFA8] text-xs font-mono text-[#38251F] outline-none"
+                />
+                <p className="text-[11px] text-[#38251F]/60 mt-1">
+                  Only people with this code will be able to unlock the surprise.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 6. Balloon Questions Card */}
         <div className="p-6 rounded-3xl bg-white/90 border border-[#FFBFA8]/70 shadow-xs relative">
           <button
             onClick={() => goToStep(3)}
-            className="absolute top-6 right-6 p-2 rounded-full hover:bg-[#FFBFA8]/30 text-[#E85B32] transition-colors"
+            className="absolute top-6 right-6 p-2 rounded-full hover:bg-[#FFBFA8]/30 text-[#E85B32] transition-colors cursor-pointer"
             title="Edit Balloon Questions"
           >
             <Edit3 className="w-4 h-4" />
@@ -175,10 +308,10 @@ export const StepReview: React.FC = () => {
             🎈 Balloon Wishes & Answers ({filledWishes.length})
           </h3>
 
-          <div className="space-y-3">
+          <div className="space-y-2">
             {filledWishes.map((w, idx) => (
-              <div key={idx} className="p-3 bg-[#FFF6F0]/60 rounded-xl border border-[#FFBFA8]/30 text-xs">
-                <span className="font-semibold text-[#38251F] block mb-1">
+              <div key={idx} className="p-2.5 bg-[#FFF6F0]/60 rounded-xl border border-[#FFBFA8]/30 text-xs">
+                <span className="font-semibold text-[#38251F] block mb-0.5">
                   Q: {w.question}
                 </span>
                 <span className="text-[#38251F]/80 italic">
@@ -186,17 +319,14 @@ export const StepReview: React.FC = () => {
                 </span>
               </div>
             ))}
-            {filledWishes.length === 0 && (
-              <p className="text-xs text-gray-400 italic">No balloon answers provided.</p>
-            )}
           </div>
         </div>
 
-        {/* 4. Memory Photographs Card */}
+        {/* 7. Memory Photographs Card */}
         <div className="p-6 rounded-3xl bg-white/90 border border-[#FFBFA8]/70 shadow-xs relative">
           <button
             onClick={() => goToStep(4)}
-            className="absolute top-6 right-6 p-2 rounded-full hover:bg-[#FFBFA8]/30 text-[#E85B32] transition-colors"
+            className="absolute top-6 right-6 p-2 rounded-full hover:bg-[#FFBFA8]/30 text-[#E85B32] transition-colors cursor-pointer"
             title="Edit Photos"
           >
             <Edit3 className="w-4 h-4" />
@@ -218,15 +348,15 @@ export const StepReview: React.FC = () => {
               ))}
             </div>
           ) : (
-            <p className="text-xs text-gray-400 italic">No photos uploaded. (The surprise still works beautifully!)</p>
+            <p className="text-xs text-gray-400 italic">No photos uploaded.</p>
           )}
         </div>
 
-        {/* 5. Birthday Letter Card */}
+        {/* 8. Birthday Letter Card */}
         <div className="p-6 rounded-3xl bg-white/90 border border-[#FFBFA8]/70 shadow-xs relative">
           <button
             onClick={() => goToStep(5)}
-            className="absolute top-6 right-6 p-2 rounded-full hover:bg-[#FFBFA8]/30 text-[#E85B32] transition-colors"
+            className="absolute top-6 right-6 p-2 rounded-full hover:bg-[#FFBFA8]/30 text-[#E85B32] transition-colors cursor-pointer"
             title="Edit Letter"
           >
             <Edit3 className="w-4 h-4" />
@@ -253,7 +383,7 @@ export const StepReview: React.FC = () => {
           <span>Create The Magic ✨</span>
         </button>
         <p className="text-xs text-[#38251F]/60 mt-3">
-          Generates your personalized surprise with animated balloons, birthday cake, letter & music!
+          Generates your personalized surprise with unique shareable link & branded QR code!
         </p>
       </div>
 

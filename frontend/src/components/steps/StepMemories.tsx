@@ -92,9 +92,9 @@ export const StepMemories: React.FC = () => {
         </button>
 
         <div className="flex items-center gap-2">
-          <span className="text-xs font-bold text-[#E85B32] uppercase tracking-wider">Step 3 of 5</span>
+          <span className="text-xs font-bold text-[#E85B32] uppercase tracking-wider">Step 3 of 7</span>
           <div className="w-24 h-2 bg-[#FFBFA8]/40 rounded-full overflow-hidden">
-            <div className="w-3/5 h-full bg-[#E85B32] rounded-full" />
+            <div className="w-[43%] h-full bg-[#E85B32] rounded-full" />
           </div>
         </div>
       </div>

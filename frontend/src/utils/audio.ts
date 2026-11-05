@@ -62,6 +62,18 @@ class SoundController {
     }
   }
 
+  public setMute(muted: boolean) {
+    this.setMuted(muted);
+  }
+
+  public playMusic(trackId?: MusicTrackId) {
+    this.startBackgroundMusic(trackId);
+  }
+
+  public stopMusic() {
+    this.stopBackgroundMusic();
+  }
+
   public getMuted(): boolean {
     return this.isMuted;
   }

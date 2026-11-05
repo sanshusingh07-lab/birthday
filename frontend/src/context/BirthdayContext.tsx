@@ -1,9 +1,11 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import type { BirthdayFormData, BirthdaySurprise, MemoryItem } from '../types/birthday';
+import type { BirthdayFormData, BirthdaySurprise, MemoryItem, VoiceMessageData, CustomThemeData } from '../types/birthday';
 import { createSurprise, getSurpriseBySlug } from '../utils/api';
-import { sound, MusicTrackId } from '../utils/audio';
+import { sound, type MusicTrackId } from '../utils/audio';
+import { DEFAULT_THEME } from '../utils/themes';
 
-export type StepNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+export type StepNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+export type ViewMode = 'wizard' | 'dashboard';
 
 export const DEFAULT_QUESTIONS = [
   {
@@ -66,18 +68,24 @@ const INITIAL_FORM_DATA: BirthdayFormData = {
     answer: ''
   })),
   memories: [],
+  voice_message: null,
+  custom_theme: JSON.parse(JSON.stringify(DEFAULT_THEME)),
   settings: {
     music_enabled: true,
-    selected_theme: 'cosmic-purple',
+    selected_theme: 'dark-galaxy',
     animation_enabled: true,
     selected_music: 'happy-birthday'
-  }
+  },
+  visibility: 'unlisted',
+  password: '',
+  expires_at: ''
 };
 
-const STORAGE_KEY = 'birthday_surprise_draft_v1';
+const STORAGE_KEY = 'birthday_surprise_draft_v2';
 
 interface BirthdayContextType {
   currentStep: StepNumber;
+  viewMode: ViewMode;
   formData: BirthdayFormData;
   activeSurprise: BirthdaySurprise | null;
   isLoadingMagic: boolean;
@@ -88,6 +96,8 @@ interface BirthdayContextType {
   isAudioMuted: boolean;
   selectedTrack: MusicTrackId;
   isAdminMode: boolean;
+  shareModalSurprise: BirthdaySurprise | null;
+  setViewMode: (mode: ViewMode) => void;
   setCurrentStep: (step: StepNumber) => void;
   nextStep: () => void;
   prevStep: () => void;
@@ -98,24 +108,33 @@ interface BirthdayContextType {
   removeMemory: (index: number) => void;
   updateMemoryCaption: (index: number, caption: string) => void;
   submitSurprise: () => Promise<BirthdaySurprise>;
-  loadSurpriseBySlug: (slug: string) => Promise<void>;
-  resetDraft: () => void;
   loadDemoSurprise: () => void;
+  resetDraft: () => void;
   toggleMusic: () => void;
   toggleMute: () => void;
   changeTrack: (track: MusicTrackId) => void;
   setIsAdminMode: (admin: boolean) => void;
+  openShareModal: (surprise: BirthdaySurprise) => void;
+  closeShareModal: () => void;
 }
 
 const BirthdayContext = createContext<BirthdayContextType | undefined>(undefined);
 
 export const BirthdayProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentStep, setCurrentStep] = useState<StepNumber>(1);
+  const [viewMode, setViewMode] = useState<ViewMode>('wizard');
+  const [shareModalSurprise, setShareModalSurprise] = useState<BirthdaySurprise | null>(null);
+
   const [formData, setFormData] = useState<BirthdayFormData>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        return {
+          ...INITIAL_FORM_DATA,
+          ...parsed,
+          custom_theme: parsed.custom_theme || INITIAL_FORM_DATA.custom_theme
+        };
       }
     } catch (e) {
       console.warn("Could not read draft from localStorage:", e);
@@ -144,14 +163,11 @@ export const BirthdayProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, [formData]);
 
-  // Handle URL route inspection (e.g. /surprise/:slug or /admin)
+  // URL path detection on mount
   useEffect(() => {
     const path = window.location.pathname;
-    if (path.startsWith('/surprise/')) {
-      const slug = path.split('/surprise/')[1];
-      if (slug) {
-        loadSurpriseBySlug(slug);
-      }
+    if (path === '/dashboard') {
+      setViewMode('dashboard');
     } else if (path === '/admin') {
       setIsAdminMode(true);
     }
@@ -197,7 +213,7 @@ export const BirthdayProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const nextStep = () => {
     sound.playClick();
-    setCurrentStep(prev => (prev < 7 ? ((prev + 1) as StepNumber) : prev));
+    setCurrentStep(prev => (prev < 8 ? ((prev + 1) as StepNumber) : prev));
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -210,6 +226,7 @@ export const BirthdayProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const goToStep = (step: StepNumber) => {
     sound.playClick();
     setCurrentStep(step);
+    setViewMode('wizard');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -232,8 +249,20 @@ export const BirthdayProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       settings: {
         ...prev.settings,
         selected_music: track
+      },
+      custom_theme: {
+        ...prev.custom_theme,
+        music_url: track
       }
     }));
+  };
+
+  const openShareModal = (surprise: BirthdaySurprise) => {
+    setShareModalSurprise(surprise);
+  };
+
+  const closeShareModal = () => {
+    setShareModalSurprise(null);
   };
 
   const submitSurprise = async (): Promise<BirthdaySurprise> => {
@@ -244,16 +273,15 @@ export const BirthdayProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const stages = [
       "Collecting beautiful memories...",
       "Preparing your birthday surprise...",
-      "Adding a little magic...",
-      "Almost ready! ✨"
+      "Generating unique shareable link & QR code...",
+      "Adding a little magic... Almost ready! ✨"
     ];
 
     try {
-      // Step through the beautiful loading stages
       for (let i = 0; i < stages.length; i++) {
         setMagicLoadingStep(stages[i]);
         sound.playSparkle();
-        await new Promise(r => setTimeout(r, 850));
+        await new Promise(r => setTimeout(r, 700));
       }
 
       const created = await createSurprise({
@@ -265,15 +293,14 @@ export const BirthdayProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       });
       setActiveSurprise(created);
       
-      // Auto-start music in the magical final experience if enabled
-      if (created.settings?.music_enabled) {
-        sound.setTrack(selectedTrack);
-        sound.startBackgroundMusic(selectedTrack);
-        setAudioPlaying(true);
-      }
+      // Clear draft once created
+      localStorage.removeItem(STORAGE_KEY);
 
-      setCurrentStep(7);
-      window.history.pushState({}, '', `/surprise/${created.unique_slug}`);
+      // Transition creator to Creator Dashboard with Share Modal immediately open!
+      setViewMode('dashboard');
+      setShareModalSurprise(created);
+      window.history.pushState({}, '', '/dashboard');
+
       return created;
     } catch (err: any) {
       setError(err.message || 'Something went wrong while creating the surprise.');
@@ -284,45 +311,26 @@ export const BirthdayProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  const loadSurpriseBySlug = async (slug: string) => {
-    setIsSubmitting(true);
-    setError(null);
-    try {
-      const surprise = await getSurpriseBySlug(slug);
-      setActiveSurprise(surprise);
-      setCurrentStep(7);
-      const track = (surprise.settings?.selected_music as MusicTrackId) || 'happy-birthday';
-      setSelectedTrack(track);
-      if (surprise.settings?.music_enabled) {
-        sound.setTrack(track);
-        sound.startBackgroundMusic(track);
-        setAudioPlaying(true);
-      }
-    } catch (err: any) {
-      setError(err.message || 'Could not load birthday surprise.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
   const resetDraft = () => {
     sound.playClick();
     localStorage.removeItem(STORAGE_KEY);
     setFormData(INITIAL_FORM_DATA);
     setActiveSurprise(null);
     setCurrentStep(1);
+    setViewMode('wizard');
     window.history.pushState({}, '', '/');
   };
 
   const loadDemoSurprise = () => {
     sound.playSparkle();
-    loadSurpriseBySlug('maya-birthday-magic');
+    window.location.href = '/s/maya-birthday-magic';
   };
 
   return (
     <BirthdayContext.Provider
       value={{
         currentStep,
+        viewMode,
         formData,
         activeSurprise,
         isLoadingMagic,
@@ -333,6 +341,8 @@ export const BirthdayProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         isAudioMuted,
         selectedTrack,
         isAdminMode,
+        shareModalSurprise,
+        setViewMode,
         setCurrentStep,
         nextStep,
         prevStep,
@@ -343,13 +353,14 @@ export const BirthdayProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         removeMemory,
         updateMemoryCaption,
         submitSurprise,
-        loadSurpriseBySlug,
-        resetDraft,
         loadDemoSurprise,
+        resetDraft,
         toggleMusic,
         toggleMute,
         changeTrack,
-        setIsAdminMode
+        setIsAdminMode,
+        openShareModal,
+        closeShareModal
       }}
     >
       {children}

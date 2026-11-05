@@ -8,9 +8,10 @@ interface SceneCelebrationProps {
   recipientName: string;
   senderName: string;
   onReplay: () => void;
-  onShare: () => void;
-  onCreateNew: () => void;
+  onShare?: () => void;
+  onCreateNew?: () => void;
   onPrev: () => void;
+  isRecipient?: boolean;
 }
 
 export const SceneCelebration: React.FC<SceneCelebrationProps> = ({
@@ -19,7 +20,8 @@ export const SceneCelebration: React.FC<SceneCelebrationProps> = ({
   onReplay,
   onShare,
   onCreateNew,
-  onPrev
+  onPrev,
+  isRecipient = false
 }) => {
   useEffect(() => {
     // Erupt continuous fireworks on finale entrance
@@ -71,11 +73,11 @@ export const SceneCelebration: React.FC<SceneCelebrationProps> = ({
       >
         Happy Birthday, {recipientName || 'You'}! Always wishing the absolute best for you. <br />
         <span className="font-handwriting text-3xl sm:text-4xl text-white block mt-3">
-          With all our love, {senderName || 'Your Loved One'} ❤️
+          With all my love, {senderName || 'Your Loved One'} ❤️
         </span>
       </motion.p>
 
-      {/* Action Buttons */}
+      {/* Action Buttons: Strict separation for Recipient */}
       <motion.div
         initial={{ opacity: 0, y: 30 }}
         animate={{ opacity: 1, y: 0 }}
@@ -85,29 +87,32 @@ export const SceneCelebration: React.FC<SceneCelebrationProps> = ({
         {/* 1. Replay Birthday Surprise */}
         <button
           onClick={onReplay}
-          className="px-6 py-3.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-semibold text-sm border border-white/25 shadow-lg transition-all flex items-center gap-2 cursor-pointer"
+          className="px-8 py-4 rounded-2xl bg-gradient-to-r from-[#E85B32] to-[#FF80AB] hover:from-[#d44e26] hover:to-[#e85b7b] text-white font-bold text-sm shadow-xl shadow-[#E85B32]/40 hover:scale-105 active:scale-95 transition-all flex items-center gap-2 cursor-pointer"
         >
-          <RotateCcw className="w-4 h-4 text-[#FFD166]" />
-          <span>Replay Birthday Surprise</span>
+          <RotateCcw className="w-5 h-5 text-white" />
+          <span>Replay Birthday Surprise ✨</span>
         </button>
 
-        {/* 2. Share Birthday Surprise */}
-        <button
-          onClick={onShare}
-          className="px-7 py-3.5 rounded-2xl bg-gradient-to-r from-[#E85B32] to-[#FF6B8B] hover:from-[#d44e26] hover:to-[#e85b7b] text-white font-bold text-sm shadow-xl shadow-[#E85B32]/40 transition-all flex items-center gap-2 cursor-pointer"
-        >
-          <Share2 className="w-4 h-4" />
-          <span>Share Birthday Surprise</span>
-        </button>
+        {/* Creator-Only Action Buttons (Hidden for recipient) */}
+        {!isRecipient && onShare && (
+          <button
+            onClick={onShare}
+            className="px-6 py-3.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-semibold text-sm border border-white/25 shadow-lg transition-all flex items-center gap-2 cursor-pointer"
+          >
+            <Share2 className="w-4 h-4" />
+            <span>Share Surprise</span>
+          </button>
+        )}
 
-        {/* 3. Create Another Surprise */}
-        <button
-          onClick={onCreateNew}
-          className="px-6 py-3.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-semibold text-sm border border-white/25 shadow-lg transition-all flex items-center gap-2 cursor-pointer"
-        >
-          <PlusCircle className="w-4 h-4 text-[#06D6A0]" />
-          <span>Create Another Surprise</span>
-        </button>
+        {!isRecipient && onCreateNew && (
+          <button
+            onClick={onCreateNew}
+            className="px-6 py-3.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-semibold text-sm border border-white/25 shadow-lg transition-all flex items-center gap-2 cursor-pointer"
+          >
+            <PlusCircle className="w-4 h-4 text-[#06D6A0]" />
+            <span>Create Another Surprise</span>
+          </button>
+        )}
       </motion.div>
 
       {/* Back button */}

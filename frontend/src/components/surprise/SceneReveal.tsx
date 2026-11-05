@@ -7,6 +7,7 @@ import { sound } from '../../utils/audio';
 interface SceneRevealProps {
   recipientName: string;
   senderName: string;
+  birthdayMessage?: string;
   onNext: () => void;
 }
 

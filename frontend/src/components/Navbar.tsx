@@ -1,37 +1,42 @@
 import React from 'react';
-import { Sparkles, Music, Volume2, VolumeX, Eye, ShieldCheck, Gift } from 'lucide-react';
+import { 
+  Gift, 
+  LayoutDashboard, 
+  PlusCircle, 
+  Music, 
+  Volume2, 
+  VolumeX, 
+  ShieldCheck, 
+  Eye 
+} from 'lucide-react';
 import { useBirthday } from '../context/BirthdayContext';
 
 export const Navbar: React.FC = () => {
   const {
     currentStep,
+    viewMode,
+    setViewMode,
     goToStep,
     audioPlaying,
     toggleMusic,
     isAudioMuted,
     toggleMute,
-    loadDemoSurprise,
     resetDraft,
     isAdminMode,
     setIsAdminMode
   } = useBirthday();
 
-  const isMagicalMode = currentStep === 7;
-
   return (
-    <header className={`sticky top-0 z-40 backdrop-blur-md transition-colors duration-300 ${
-      isMagicalMode
-        ? 'bg-[#170D2D]/70 border-b border-white/10 text-white'
-        : 'bg-[#FFF6F0]/80 border-b border-[#FFBFA8]/40 text-[#38251F]'
-    }`}>
+    <header className="sticky top-0 z-40 backdrop-blur-md bg-[#FFF6F0]/85 border-b border-[#FFBFA8]/40 text-[#38251F]">
       <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
         {/* Logo */}
         <button
           onClick={() => {
             setIsAdminMode(false);
-            if (currentStep !== 1) goToStep(1);
+            setViewMode('wizard');
+            goToStep(1);
           }}
-          className="flex items-center gap-2.5 group transition-transform active:scale-95 text-left"
+          className="flex items-center gap-2.5 group transition-transform active:scale-95 text-left cursor-pointer"
         >
           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[#E85B32] to-[#F7A6A0] flex items-center justify-center text-white shadow-md shadow-[#E85B32]/25 group-hover:rotate-6 transition-transform">
             <Gift className="w-5 h-5" />
@@ -41,20 +46,22 @@ export const Navbar: React.FC = () => {
               Birthday Magic
             </span>
             <span className="text-[10px] uppercase tracking-widest text-[#E85B32] font-semibold block">
-              Personalized Surprise
+              Personalized Platform
             </span>
           </div>
         </button>
 
-        {/* Steps Progress Pills (when creating, steps 2..6) */}
-        {!isMagicalMode && currentStep > 1 && currentStep < 7 && !isAdminMode && (
-          <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-white/60 rounded-full border border-[#FFBFA8]/50 shadow-xs">
+        {/* Steps Progress Pills (when creating, steps 2..8) */}
+        {viewMode === 'wizard' && currentStep > 1 && currentStep <= 8 && !isAdminMode && (
+          <div className="hidden lg:flex items-center gap-1 px-3 py-1 bg-white/70 rounded-full border border-[#FFBFA8]/50 shadow-xs">
             {[
               { num: 2, label: "Star" },
               { num: 3, label: "Balloons" },
               { num: 4, label: "Photos" },
               { num: 5, label: "Letter" },
-              { num: 6, label: "Review" },
+              { num: 6, label: "Voice" },
+              { num: 7, label: "Theme" },
+              { num: 8, label: "Review" },
             ].map(s => {
               const isActive = currentStep === s.num;
               const isPassed = currentStep > s.num;
@@ -62,7 +69,7 @@ export const Navbar: React.FC = () => {
                 <button
                   key={s.num}
                   onClick={() => goToStep(s.num as any)}
-                  className={`text-xs px-2.5 py-1 rounded-full font-medium transition-all ${
+                  className={`text-[11px] px-2.5 py-1 rounded-full font-bold transition-all cursor-pointer ${
                     isActive
                       ? 'bg-[#E85B32] text-white shadow-xs scale-105'
                       : isPassed
@@ -79,26 +86,37 @@ export const Navbar: React.FC = () => {
 
         {/* Action Controls */}
         <div className="flex items-center gap-2">
-          {/* Sample Surprise Button */}
-          {!isMagicalMode && (
+          {/* Dashboard Switcher Button */}
+          {viewMode === 'wizard' ? (
             <button
-              onClick={loadDemoSurprise}
-              className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full bg-[#FFBFA8]/30 hover:bg-[#FFBFA8]/60 text-[#38251F] border border-[#FFBFA8] transition-all"
-              title="Preview a finished sample surprise"
+              onClick={() => {
+                setViewMode('dashboard');
+                window.history.pushState({}, '', '/dashboard');
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-xl bg-white border border-[#FFBFA8] hover:border-[#E85B32] text-[#38251F] transition-all cursor-pointer shadow-2xs"
             >
-              <Eye className="w-3.5 h-3.5 text-[#E85B32]" />
-              <span>Sample Surprise</span>
+              <LayoutDashboard className="w-3.5 h-3.5 text-[#E85B32]" />
+              <span className="hidden sm:inline">My Surprises</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => {
+                resetDraft();
+                goToStep(2);
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-xl bg-[#E85B32] text-white transition-all cursor-pointer shadow-xs hover:bg-[#d44e26]"
+            >
+              <PlusCircle className="w-3.5 h-3.5" />
+              <span>Create New</span>
             </button>
           )}
 
           {/* Music Toggle */}
           <button
             onClick={toggleMusic}
-            className={`p-2 rounded-full border transition-all flex items-center justify-center ${
+            className={`p-2 rounded-full border transition-all flex items-center justify-center cursor-pointer ${
               audioPlaying
-                ? 'bg-[#E85B32] text-white border-[#E85B32] shadow-sm'
-                : isMagicalMode
-                ? 'bg-white/10 text-white/80 border-white/20 hover:bg-white/20'
+                ? 'bg-[#E85B32] text-white border-[#E85B32] shadow-xs'
                 : 'bg-white/80 text-[#38251F] border-[#FFBFA8] hover:bg-white'
             }`}
             title={audioPlaying ? "Pause Background Music" : "Play Background Music"}
@@ -109,11 +127,9 @@ export const Navbar: React.FC = () => {
           {/* Mute Toggle */}
           <button
             onClick={toggleMute}
-            className={`p-2 rounded-full border transition-all flex items-center justify-center ${
+            className={`p-2 rounded-full border transition-all flex items-center justify-center cursor-pointer ${
               isAudioMuted
-                ? 'bg-red-500/10 text-red-500 border-red-300'
-                : isMagicalMode
-                ? 'bg-white/10 text-white/80 border-white/20 hover:bg-white/20'
+                ? 'bg-rose-50 text-rose-500 border-rose-200'
                 : 'bg-white/80 text-[#38251F] border-[#FFBFA8] hover:bg-white'
             }`}
             title={isAudioMuted ? "Unmute Audio" : "Mute Sound Effects"}
@@ -124,14 +140,12 @@ export const Navbar: React.FC = () => {
           {/* Admin Dashboard Toggle */}
           <button
             onClick={() => setIsAdminMode(!isAdminMode)}
-            className={`p-2 rounded-full border transition-all flex items-center justify-center ${
+            className={`p-2 rounded-full border transition-all flex items-center justify-center cursor-pointer ${
               isAdminMode
                 ? 'bg-[#38251F] text-white border-[#38251F]'
-                : isMagicalMode
-                ? 'bg-white/10 text-white/60 border-white/20 hover:bg-white/20'
                 : 'bg-white/80 text-gray-500 border-[#FFBFA8] hover:text-[#38251F]'
             }`}
-            title="Admin Dashboard"
+            title="Admin Stats & Database"
           >
             <ShieldCheck className="w-4 h-4" />
           </button>
@@ -140,4 +154,3 @@ export const Navbar: React.FC = () => {
     </header>
   );
 };
-

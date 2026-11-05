@@ -2,9 +2,12 @@ import os
 import uuid
 import re
 import shutil
+import secrets
+import hashlib
+import datetime
 from typing import List, Optional
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, status
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, status, Header
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -20,12 +23,14 @@ Base.metadata.create_all(bind=engine)
 
 # Upload directory
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
+VOICE_DIR = os.path.join(UPLOAD_DIR, "voice")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(VOICE_DIR, exist_ok=True)
 
 app = FastAPI(
-    title="Birthday Surprise API",
-    description="Backend API for creating and sharing personalized birthday surprises",
-    version="1.0.0"
+    title="Birthday Surprise Platform API",
+    description="Backend API for creating, customizing, and sharing personalized birthday surprises with voice messages and custom themes",
+    version="2.0.0"
 )
 
 # CORS configuration
@@ -40,28 +45,95 @@ app.add_middleware(
 # Mount static uploads
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
-def generate_slug(name: str) -> str:
-    cleaned = re.sub(r'[^a-zA-Z0-9]', '-', name.lower().strip())
-    cleaned = re.sub(r'-+', '-', cleaned).strip('-')
-    random_suffix = uuid.uuid4().hex[:6]
-    return f"{cleaned or 'surprise'}-{random_suffix}"
+
+# ==========================================
+# HELPER FUNCTIONS
+# ==========================================
+def generate_secure_slug(prefix: Optional[str] = None) -> str:
+    """Generate a clean, secure, random non-guessable slug (e.g. 8f7k2m9x)."""
+    alphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+    random_str = "".join(secrets.choice(alphabet) for _ in range(8))
+    if prefix:
+        clean_prefix = re.sub(r'[^a-zA-Z0-9]', '', prefix.lower().strip())[:10]
+        if clean_prefix:
+            return f"{clean_prefix}-{random_str}"
+    return random_str
+
+def hash_password(password: str) -> str:
+    """Salted SHA-256 hash for password protection."""
+    salt = secrets.token_hex(16)
+    hashed = hashlib.sha256((salt + password).encode('utf-8')).hexdigest()
+    return f"{salt}:{hashed}"
+
+def verify_password(password: str, stored_hash: Optional[str]) -> bool:
+    """Verify password against salted hash."""
+    if not stored_hash or ":" not in stored_hash:
+        return False
+    salt, hashed = stored_hash.split(":", 1)
+    test_hashed = hashlib.sha256((salt + password).encode('utf-8')).hexdigest()
+    return test_hashed == hashed
+
+def serialize_surprise_out(surprise: models.BirthdaySurprise) -> dict:
+    """Serialize full BirthdaySurprise including has_password indicator."""
+    return {
+        "id": surprise.id,
+        "creator_id": surprise.creator_id,
+        "unique_slug": surprise.unique_slug,
+        "recipient_name": surprise.recipient_name,
+        "sender_name": surprise.sender_name,
+        "relationship": surprise.relationship,
+        "birth_date": surprise.birth_date,
+        "celebration_date": surprise.celebration_date,
+        "birthday_message": surprise.birthday_message,
+        "birthday_letter": surprise.birthday_letter,
+        "status": surprise.status or "published",
+        "visibility": surprise.visibility or "unlisted",
+        "is_active": surprise.is_active if surprise.is_active is not None else True,
+        "has_password": bool(surprise.password_hash),
+        "expires_at": surprise.expires_at,
+        "view_count": surprise.view_count or 0,
+        "last_viewed_at": surprise.last_viewed_at,
+        "created_at": surprise.created_at,
+        "updated_at": surprise.updated_at,
+        "wishes": surprise.wishes,
+        "memories": surprise.memories,
+        "settings": surprise.settings,
+        "voice_message": surprise.voice_message,
+        "custom_theme": surprise.custom_theme
+    }
 
 
+# ==========================================
+# HEALTH CHECK
+# ==========================================
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "app": "Birthday Surprise API"}
+    return {"status": "ok", "app": "Birthday Surprise Platform v2.0"}
 
 
+# ==========================================
+# MODULE 1 & 6: BIRTHDAY SURPRISE CRUD
+# ==========================================
 @app.post("/api/birthday/create", response_model=schemas.BirthdaySurpriseOut, status_code=status.HTTP_201_CREATED)
 def create_birthday_surprise(surprise_in: schemas.BirthdaySurpriseCreate, db: Session = Depends(get_db)):
-    """Create a new birthday surprise experience with all wishes, memories, and settings."""
-    slug = generate_slug(surprise_in.recipient_name)
-    
-    # Ensure slug uniqueness
+    """Create a new birthday surprise experience with custom theme, voice message, wishes, and memories."""
+    slug = generate_secure_slug(surprise_in.recipient_name)
     while db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.unique_slug == slug).first():
-        slug = generate_slug(surprise_in.recipient_name)
+        slug = generate_secure_slug(surprise_in.recipient_name)
+
+    # Password hashing if provided
+    pwd_hash = hash_password(surprise_in.password) if surprise_in.password else None
+    
+    # Expiry parsing if provided
+    exp_date = None
+    if surprise_in.expires_at:
+        try:
+            exp_date = datetime.datetime.fromisoformat(surprise_in.expires_at.replace("Z", "+00:00"))
+        except Exception:
+            exp_date = None
 
     surprise = models.BirthdaySurprise(
+        creator_id=surprise_in.creator_id or secrets.token_hex(16),
         unique_slug=slug,
         recipient_name=surprise_in.recipient_name,
         sender_name=surprise_in.sender_name,
@@ -69,7 +141,13 @@ def create_birthday_surprise(surprise_in: schemas.BirthdaySurpriseCreate, db: Se
         birth_date=surprise_in.birth_date,
         celebration_date=surprise_in.celebration_date,
         birthday_message=surprise_in.birthday_message,
-        birthday_letter=surprise_in.birthday_letter
+        birthday_letter=surprise_in.birthday_letter,
+        status="published",
+        visibility=surprise_in.visibility or ("password_protected" if pwd_hash else "unlisted"),
+        password_hash=pwd_hash,
+        expires_at=exp_date,
+        is_active=True,
+        view_count=0
     )
     db.add(surprise)
     db.flush()
@@ -94,53 +172,100 @@ def create_birthday_surprise(surprise_in: schemas.BirthdaySurpriseCreate, db: Se
             )
             db.add(memory)
 
-    # Add settings
-    setting_data = surprise_in.settings or schemas.SettingCreate()
+    # Add Voice Message if provided
+    if surprise_in.voice_message:
+        vm = models.VoiceMessage(
+            surprise_id=surprise.id,
+            audio_url=surprise_in.voice_message.audio_url,
+            audio_format=surprise_in.voice_message.audio_format or "audio/webm",
+            duration=surprise_in.voice_message.duration or 0.0,
+            title=surprise_in.voice_message.title or "A special voice message for you ❤️",
+            cover_image_url=surprise_in.voice_message.cover_image_url
+        )
+        db.add(vm)
+
+    # Add Custom Theme if provided
+    ct_data = surprise_in.custom_theme or schemas.CustomThemeCreate()
+    custom_theme = models.CustomTheme(
+        surprise_id=surprise.id,
+        theme_name=ct_data.theme_name,
+        primary_color=ct_data.primary_color,
+        secondary_color=ct_data.secondary_color,
+        background_color=ct_data.background_color,
+        text_color=ct_data.text_color,
+        accent_color=ct_data.accent_color,
+        card_background=ct_data.card_background,
+        heading_font=ct_data.heading_font,
+        body_font=ct_data.body_font,
+        background_type=ct_data.background_type,
+        background_value=ct_data.background_value,
+        animation_settings=ct_data.animation_settings or '{"balloons":true,"hearts":true,"confetti":true,"fireworks":true,"sparkles":true,"stars":true,"typewriter":true,"glow":true,"intensity":"medium"}',
+        music_url=ct_data.music_url or "happy-birthday",
+        custom_settings=ct_data.custom_settings or "{}"
+    )
+    db.add(custom_theme)
+
+    # Legacy Setting support
     setting = models.Setting(
         surprise_id=surprise.id,
-        music_enabled=setting_data.music_enabled,
-        selected_theme=setting_data.selected_theme,
-        animation_enabled=setting_data.animation_enabled,
-        selected_music=getattr(setting_data, "selected_music", "happy-birthday") or "happy-birthday"
+        music_enabled=True,
+        selected_theme=ct_data.theme_name,
+        animation_enabled=True,
+        selected_music=ct_data.music_url or "happy-birthday"
     )
     db.add(setting)
 
+    # Create initial ShareLink entry
+    share_link = models.ShareLink(
+        surprise_id=surprise.id,
+        unique_slug=slug,
+        is_active=True,
+        password_protected=bool(pwd_hash),
+        expires_at=exp_date
+    )
+    db.add(share_link)
+
     db.commit()
     db.refresh(surprise)
-    return surprise
+    return serialize_surprise_out(surprise)
 
 
 @app.get("/api/birthday/{id}", response_model=schemas.BirthdaySurpriseOut)
 def get_birthday_surprise(id: int, db: Session = Depends(get_db)):
-    """Retrieve surprise details by ID."""
+    """Retrieve full surprise details for the authorized creator."""
     surprise = db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.id == id).first()
     if not surprise:
         raise HTTPException(status_code=404, detail="Birthday surprise not found")
-    return surprise
-
-
-@app.get("/api/birthday/share/{slug}", response_model=schemas.BirthdaySurpriseOut)
-def get_shared_birthday_surprise(slug: str, db: Session = Depends(get_db)):
-    """Retrieve surprise experience by unique public slug."""
-    surprise = db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.unique_slug == slug).first()
-    if not surprise:
-        raise HTTPException(status_code=404, detail="Birthday surprise not found for this link")
-    return surprise
+    return serialize_surprise_out(surprise)
 
 
 @app.put("/api/birthday/{id}", response_model=schemas.BirthdaySurpriseOut)
 def update_birthday_surprise(id: int, update_data: schemas.BirthdaySurpriseUpdate, db: Session = Depends(get_db)):
-    """Update an existing birthday surprise."""
+    """Update birthday surprise details, memories, wishes, and theme."""
     surprise = db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.id == id).first()
     if not surprise:
         raise HTTPException(status_code=404, detail="Birthday surprise not found")
 
     update_dict = update_data.model_dump(exclude_unset=True)
 
-    # Simple scalar field updates
-    for field in ["recipient_name", "sender_name", "relationship", "birth_date", "celebration_date", "birthday_message", "birthday_letter"]:
+    for field in ["recipient_name", "sender_name", "relationship", "birth_date", "celebration_date", "birthday_message", "birthday_letter", "visibility", "is_active"]:
         if field in update_dict and update_dict[field] is not None:
             setattr(surprise, field, update_dict[field])
+
+    if "password" in update_dict and update_dict["password"] is not None:
+        if update_dict["password"]:
+            surprise.password_hash = hash_password(update_dict["password"])
+            surprise.visibility = "password_protected"
+        else:
+            surprise.password_hash = None
+            if surprise.visibility == "password_protected":
+                surprise.visibility = "unlisted"
+
+    if "expires_at" in update_dict and update_dict["expires_at"] is not None:
+        try:
+            surprise.expires_at = datetime.datetime.fromisoformat(update_dict["expires_at"].replace("Z", "+00:00"))
+        except Exception:
+            surprise.expires_at = None
 
     # Update wishes if provided
     if "wishes" in update_dict and update_dict["wishes"] is not None:
@@ -154,32 +279,26 @@ def update_birthday_surprise(id: int, update_data: schemas.BirthdaySurpriseUpdat
         for m in update_dict["memories"]:
             db.add(models.Memory(surprise_id=surprise.id, image_url=m["image_url"], caption=m.get("caption")))
 
-    # Update settings if provided
-    if "settings" in update_dict and update_dict["settings"] is not None:
-        setting = db.query(models.Setting).filter(models.Setting.surprise_id == surprise.id).first()
-        s_data = update_dict["settings"]
-        if setting:
-            setting.music_enabled = s_data.get("music_enabled", setting.music_enabled)
-            setting.selected_theme = s_data.get("selected_theme", setting.selected_theme)
-            setting.animation_enabled = s_data.get("animation_enabled", setting.animation_enabled)
-            setting.selected_music = s_data.get("selected_music", getattr(setting, "selected_music", "happy-birthday"))
-        else:
-            db.add(models.Setting(
-                surprise_id=surprise.id,
-                music_enabled=s_data.get("music_enabled", True),
-                selected_theme=s_data.get("selected_theme", "cosmic-purple"),
-                animation_enabled=s_data.get("animation_enabled", True),
-                selected_music=s_data.get("selected_music", "happy-birthday")
-            ))
+    # Update custom theme if provided
+    if "custom_theme" in update_dict and update_dict["custom_theme"] is not None:
+        ct_dict = update_dict["custom_theme"]
+        ct = db.query(models.CustomTheme).filter(models.CustomTheme.surprise_id == surprise.id).first()
+        if not ct:
+            ct = models.CustomTheme(surprise_id=surprise.id)
+            db.add(ct)
+        for k, v in ct_dict.items():
+            if hasattr(ct, k) and v is not None:
+                setattr(ct, k, v)
 
+    surprise.updated_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(surprise)
-    return surprise
+    return serialize_surprise_out(surprise)
 
 
 @app.delete("/api/birthday/{id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_birthday_surprise(id: int, db: Session = Depends(get_db)):
-    """Delete a birthday surprise and its associated memories/wishes."""
+    """Delete a birthday surprise completely."""
     surprise = db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.id == id).first()
     if not surprise:
         raise HTTPException(status_code=404, detail="Birthday surprise not found")
@@ -188,6 +307,386 @@ def delete_birthday_surprise(id: int, db: Session = Depends(get_db)):
     return None
 
 
+# ==========================================
+# CREATOR DASHBOARD: LIST SURPRISES
+# ==========================================
+@app.get("/api/creator/surprises", response_model=List[schemas.BirthdaySurpriseOut])
+def get_creator_surprises(creator_id: Optional[str] = None, db: Session = Depends(get_db)):
+    """List surprises created by this creator (or all recent if creator_id not passed)."""
+    query = db.query(models.BirthdaySurprise)
+    if creator_id:
+        surprises = query.filter(models.BirthdaySurprise.creator_id == creator_id).order_by(desc(models.BirthdaySurprise.created_at)).all()
+        if not surprises:
+            # Fallback to latest so creators never lose work across browser restarts
+            surprises = query.order_by(desc(models.BirthdaySurprise.created_at)).limit(20).all()
+    else:
+        surprises = query.order_by(desc(models.BirthdaySurprise.created_at)).limit(20).all()
+
+    return [serialize_surprise_out(s) for s in surprises]
+
+
+# ==========================================
+# MODULE 1: VOICE RECORDING ENDPOINTS
+# ==========================================
+@app.post("/api/birthday/voice-temp")
+async def upload_temp_voice(
+    file: UploadFile = File(...),
+    duration: Optional[float] = Form(0.0),
+    title: Optional[str] = Form("A special voice message for you ❤️")
+):
+    """Upload voice recording prior to surprise creation (returns audio URL)."""
+    allowed_exts = {".webm", ".mp3", ".wav", ".m4a", ".ogg"}
+    filename = file.filename or "recording.webm"
+    ext = os.path.splitext(filename)[1].lower()
+    if not ext or ext not in allowed_exts:
+        ext = ".webm"
+
+    unique_name = f"voice_temp_{uuid.uuid4().hex}{ext}"
+    file_path = os.path.join(VOICE_DIR, unique_name)
+
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save voice recording: {str(e)}")
+
+    return {
+        "audio_url": f"/uploads/voice/{unique_name}",
+        "audio_format": file.content_type or f"audio/{ext.lstrip('.')}",
+        "duration": duration,
+        "title": title
+    }
+
+
+@app.post("/api/birthday/{id}/voice", response_model=schemas.VoiceMessageOut)
+async def upload_birthday_voice(
+    id: int,
+    file: UploadFile = File(...),
+    duration: Optional[float] = Form(0.0),
+    title: Optional[str] = Form("A special voice message for you ❤️"),
+    db: Session = Depends(get_db)
+):
+    """Upload or attach recorded voice message to a specific surprise."""
+    surprise = db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.id == id).first()
+    if not surprise:
+        raise HTTPException(status_code=404, detail="Birthday surprise not found")
+
+    filename = file.filename or "recording.webm"
+    ext = os.path.splitext(filename)[1].lower() or ".webm"
+    unique_name = f"voice_{id}_{uuid.uuid4().hex[:8]}{ext}"
+    file_path = os.path.join(VOICE_DIR, unique_name)
+
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save voice recording: {str(e)}")
+
+    audio_url = f"/uploads/voice/{unique_name}"
+
+    # Upsert VoiceMessage
+    vm = db.query(models.VoiceMessage).filter(models.VoiceMessage.surprise_id == surprise.id).first()
+    if vm:
+        vm.audio_url = audio_url
+        vm.audio_format = file.content_type or f"audio/{ext.lstrip('.')}"
+        vm.duration = duration or vm.duration
+        vm.title = title or vm.title
+    else:
+        vm = models.VoiceMessage(
+            surprise_id=surprise.id,
+            audio_url=audio_url,
+            audio_format=file.content_type or f"audio/{ext.lstrip('.')}",
+            duration=duration,
+            title=title
+        )
+        db.add(vm)
+
+    db.commit()
+    db.refresh(vm)
+    return vm
+
+
+@app.delete("/api/birthday/{id}/voice", status_code=status.HTTP_204_NO_CONTENT)
+def delete_birthday_voice(id: int, db: Session = Depends(get_db)):
+    """Delete voice message attached to surprise."""
+    vm = db.query(models.VoiceMessage).filter(models.VoiceMessage.surprise_id == id).first()
+    if not vm:
+        raise HTTPException(status_code=404, detail="Voice message not found")
+    db.delete(vm)
+    db.commit()
+    return None
+
+
+# ==========================================
+# MODULE 2: CUSTOM THEME STUDIO ENDPOINTS
+# ==========================================
+@app.post("/api/birthday/{id}/theme", response_model=schemas.CustomThemeOut)
+def save_custom_theme(id: int, theme_in: schemas.CustomThemeCreate, db: Session = Depends(get_db)):
+    """Save custom theme settings for a birthday surprise."""
+    surprise = db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.id == id).first()
+    if not surprise:
+        raise HTTPException(status_code=404, detail="Birthday surprise not found")
+
+    ct = db.query(models.CustomTheme).filter(models.CustomTheme.surprise_id == surprise.id).first()
+    if not ct:
+        ct = models.CustomTheme(surprise_id=surprise.id)
+        db.add(ct)
+
+    for k, v in theme_in.model_dump().items():
+        if hasattr(ct, k) and v is not None:
+            setattr(ct, k, v)
+
+    # Sync with legacy Setting model
+    setting = db.query(models.Setting).filter(models.Setting.surprise_id == surprise.id).first()
+    if setting:
+        setting.selected_theme = ct.theme_name
+        setting.selected_music = ct.music_url or "happy-birthday"
+
+    db.commit()
+    db.refresh(ct)
+    return ct
+
+
+@app.get("/api/birthday/{id}/theme", response_model=schemas.CustomThemeOut)
+def get_custom_theme(id: int, db: Session = Depends(get_db)):
+    """Retrieve saved theme for a birthday surprise."""
+    ct = db.query(models.CustomTheme).filter(models.CustomTheme.surprise_id == id).first()
+    if not ct:
+        raise HTTPException(status_code=404, detail="Custom theme not found")
+    return ct
+
+
+# ==========================================
+# MODULE 3: SHAREABLE URL & QR CODE SYSTEM
+# ==========================================
+@app.post("/api/birthday/{id}/publish")
+def publish_birthday_surprise(id: int, db: Session = Depends(get_db)):
+    """Publish birthday surprise, ensure active share link and return share URL."""
+    surprise = db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.id == id).first()
+    if not surprise:
+        raise HTTPException(status_code=404, detail="Birthday surprise not found")
+
+    surprise.status = "published"
+    surprise.is_active = True
+    db.commit()
+
+    return {
+        "message": "Surprise published successfully",
+        "unique_slug": surprise.unique_slug,
+        "share_url": f"/s/{surprise.unique_slug}"
+    }
+
+
+@app.post("/api/birthday/{id}/share")
+def update_share_settings(id: int, payload: schemas.ShareSettingsUpdate, db: Session = Depends(get_db)):
+    """Update visibility, password protection, and expiry for shareable link."""
+    surprise = db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.id == id).first()
+    if not surprise:
+        raise HTTPException(status_code=404, detail="Birthday surprise not found")
+
+    if payload.visibility is not None:
+        surprise.visibility = payload.visibility
+
+    if payload.password is not None:
+        if payload.password.strip():
+            surprise.password_hash = hash_password(payload.password.strip())
+            surprise.visibility = "password_protected"
+        else:
+            surprise.password_hash = None
+            if surprise.visibility == "password_protected":
+                surprise.visibility = "unlisted"
+
+    if payload.expires_at is not None:
+        if payload.expires_at.strip():
+            try:
+                surprise.expires_at = datetime.datetime.fromisoformat(payload.expires_at.replace("Z", "+00:00"))
+            except Exception:
+                pass
+        else:
+            surprise.expires_at = None
+
+    if payload.is_active is not None:
+        surprise.is_active = payload.is_active
+
+    db.commit()
+    db.refresh(surprise)
+    return {
+        "message": "Share settings updated successfully",
+        "unique_slug": surprise.unique_slug,
+        "visibility": surprise.visibility,
+        "is_active": surprise.is_active,
+        "has_password": bool(surprise.password_hash),
+        "expires_at": surprise.expires_at
+    }
+
+
+@app.post("/api/birthday/{id}/regenerate-link")
+def regenerate_share_link(id: int, db: Session = Depends(get_db)):
+    """Generate a new unique random slug. The previous link becomes immediately invalid."""
+    surprise = db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.id == id).first()
+    if not surprise:
+        raise HTTPException(status_code=404, detail="Birthday surprise not found")
+
+    new_slug = generate_secure_slug(surprise.recipient_name)
+    while db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.unique_slug == new_slug).first():
+        new_slug = generate_secure_slug(surprise.recipient_name)
+
+    # Deactivate any previous share link records
+    db.query(models.ShareLink).filter(models.ShareLink.surprise_id == surprise.id).update({"is_active": False})
+
+    surprise.unique_slug = new_slug
+    # Add new active share link
+    share_link = models.ShareLink(
+        surprise_id=surprise.id,
+        unique_slug=new_slug,
+        is_active=True,
+        password_protected=bool(surprise.password_hash),
+        expires_at=surprise.expires_at
+    )
+    db.add(share_link)
+
+    db.commit()
+    return {
+        "message": "New link generated successfully. Previous link is now invalid.",
+        "unique_slug": new_slug,
+        "share_url": f"/s/{new_slug}"
+    }
+
+
+@app.post("/api/birthday/{id}/disable-link")
+def toggle_share_link(id: int, db: Session = Depends(get_db)):
+    """Toggle sharing access (disable / enable existing link)."""
+    surprise = db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.id == id).first()
+    if not surprise:
+        raise HTTPException(status_code=404, detail="Birthday surprise not found")
+
+    surprise.is_active = not bool(surprise.is_active)
+    db.commit()
+    return {
+        "message": "Link enabled" if surprise.is_active else "Link disabled",
+        "is_active": surprise.is_active,
+        "unique_slug": surprise.unique_slug
+    }
+
+
+@app.get("/api/birthday/{id}/analytics", response_model=schemas.AnalyticsOut)
+def get_surprise_analytics(id: int, db: Session = Depends(get_db)):
+    """Retrieve access statistics for creator dashboard."""
+    surprise = db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.id == id).first()
+    if not surprise:
+        raise HTTPException(status_code=404, detail="Birthday surprise not found")
+
+    now = datetime.datetime.utcnow()
+    is_expired = bool(surprise.expires_at and surprise.expires_at < now)
+
+    return schemas.AnalyticsOut(
+        surprise_id=surprise.id,
+        unique_slug=surprise.unique_slug,
+        view_count=surprise.view_count or 0,
+        last_viewed_at=surprise.last_viewed_at,
+        is_active=bool(surprise.is_active),
+        visibility=surprise.visibility or "unlisted",
+        expires_at=surprise.expires_at,
+        is_expired=is_expired
+    )
+
+
+# ==========================================
+# MODULE 4: STRICT SEPARATION - RECIPIENT PUBLIC VIEW
+# ==========================================
+@app.get("/api/surprise/{slug}")
+def get_recipient_surprise(slug: str, db: Session = Depends(get_db)):
+    """
+    Publicly accessible recipient birthday experience.
+    Strictly read-only and distraction-free:
+    - Never exposes passwords, hashes, creator IDs, or editing capabilities.
+    - If link is inactive or expired -> returns 404 / 403.
+    - If password protected -> returns masked object requesting password.
+    - Increments view count upon successful access.
+    """
+    surprise = db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.unique_slug == slug).first()
+    if not surprise:
+        raise HTTPException(status_code=404, detail="This birthday surprise link is invalid or has expired.")
+
+    # Check if disabled
+    if surprise.is_active is False:
+        raise HTTPException(status_code=403, detail="This birthday surprise has been disabled by its sender.")
+
+    # Check if expired
+    if surprise.expires_at and surprise.expires_at < datetime.datetime.utcnow():
+        raise HTTPException(status_code=403, detail="This birthday surprise link has expired.")
+
+    # Check password protection
+    if surprise.visibility == "password_protected" and surprise.password_hash:
+        return {
+            "is_password_protected": True,
+            "recipient_name": surprise.recipient_name,
+            "sender_name": surprise.sender_name
+        }
+
+    # Increment view count
+    surprise.view_count = (surprise.view_count or 0) + 1
+    surprise.last_viewed_at = datetime.datetime.utcnow()
+    db.commit()
+
+    return {
+        "is_password_protected": False,
+        "recipient_name": surprise.recipient_name,
+        "sender_name": surprise.sender_name,
+        "relationship": surprise.relationship,
+        "birth_date": surprise.birth_date,
+        "celebration_date": surprise.celebration_date,
+        "birthday_message": surprise.birthday_message,
+        "birthday_letter": surprise.birthday_letter,
+        "wishes": surprise.wishes,
+        "memories": surprise.memories,
+        "voice_message": surprise.voice_message,
+        "custom_theme": surprise.custom_theme,
+        "settings": surprise.settings
+    }
+
+
+@app.post("/api/surprise/{slug}/verify-password")
+def verify_recipient_password(slug: str, req: schemas.PasswordVerifyRequest, db: Session = Depends(get_db)):
+    """Verify password for password-protected surprise and unlock the full experience."""
+    surprise = db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.unique_slug == slug).first()
+    if not surprise:
+        raise HTTPException(status_code=404, detail="Birthday surprise not found")
+
+    if not verify_password(req.password, surprise.password_hash):
+        raise HTTPException(status_code=401, detail="Incorrect secret password. Please ask the sender!")
+
+    # Increment view count
+    surprise.view_count = (surprise.view_count or 0) + 1
+    surprise.last_viewed_at = datetime.datetime.utcnow()
+    db.commit()
+
+    return {
+        "is_password_protected": False,
+        "recipient_name": surprise.recipient_name,
+        "sender_name": surprise.sender_name,
+        "relationship": surprise.relationship,
+        "birth_date": surprise.birth_date,
+        "celebration_date": surprise.celebration_date,
+        "birthday_message": surprise.birthday_message,
+        "birthday_letter": surprise.birthday_letter,
+        "wishes": surprise.wishes,
+        "memories": surprise.memories,
+        "voice_message": surprise.voice_message,
+        "custom_theme": surprise.custom_theme,
+        "settings": surprise.settings
+    }
+
+
+# Backward-compatible alias for existing frontend links
+@app.get("/api/birthday/share/{slug}")
+def get_shared_birthday_surprise_compat(slug: str, db: Session = Depends(get_db)):
+    return get_recipient_surprise(slug, db)
+
+
+# ==========================================
+# PHOTO UPLOAD ENDPOINTS
+# ==========================================
 @app.post("/api/birthday/{id}/upload", response_model=schemas.MemoryOut)
 async def upload_birthday_photo(
     id: int,
@@ -195,18 +694,15 @@ async def upload_birthday_photo(
     caption: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
-    """Upload a photograph for a birthday surprise."""
     surprise = db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.id == id).first()
     if not surprise:
         raise HTTPException(status_code=404, detail="Birthday surprise not found")
 
-    # Validate file extension
     allowed_extensions = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in allowed_extensions:
-        raise HTTPException(status_code=400, detail="Invalid image format. Supported formats: JPG, PNG, WEBP, GIF.")
+        raise HTTPException(status_code=400, detail="Invalid image format. Supported: JPG, PNG, WEBP, GIF.")
 
-    # Generate unique filename
     filename = f"memory_{id}_{uuid.uuid4().hex[:8]}{ext}"
     file_path = os.path.join(UPLOAD_DIR, filename)
 
@@ -232,11 +728,10 @@ async def upload_birthday_photo(
 async def upload_temp_photo(
     file: UploadFile = File(...)
 ):
-    """Upload photo prior to surprise creation (returns image URL to store in client state)."""
     allowed_extensions = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in allowed_extensions:
-        raise HTTPException(status_code=400, detail="Invalid image format. Supported formats: JPG, PNG, WEBP, GIF.")
+        raise HTTPException(status_code=400, detail="Invalid image format. Supported: JPG, PNG, WEBP, GIF.")
 
     filename = f"temp_{uuid.uuid4().hex}{ext}"
     file_path = os.path.join(UPLOAD_DIR, filename)
@@ -250,9 +745,11 @@ async def upload_temp_photo(
     return {"image_url": f"/uploads/{filename}"}
 
 
+# ==========================================
+# AI LETTER GENERATION
+# ==========================================
 @app.post("/api/birthday/generate-letter", response_model=schemas.LetterGenerateResponse)
 async def generate_letter(payload: schemas.LetterGenerateRequest):
-    """Generate a personalized birthday letter using AI or personalized high-grade templates."""
     result = await generate_letter_with_ai(
         recipient=payload.recipient_name,
         sender=payload.sender_name,
@@ -268,36 +765,40 @@ async def generate_letter(payload: schemas.LetterGenerateRequest):
     )
 
 
+# ==========================================
+# ADMIN STATS & SEED
+# ==========================================
 @app.get("/api/admin/stats", response_model=schemas.AdminStats)
 def get_admin_stats(db: Session = Depends(get_db)):
-    """Retrieve site analytics and recent surprise creations for admin dashboard."""
     total_surprises = db.query(models.BirthdaySurprise).count()
     total_memories = db.query(models.Memory).count()
     total_wishes = db.query(models.BirthdayWish).count()
+    total_voice_messages = db.query(models.VoiceMessage).count()
     latest = db.query(models.BirthdaySurprise).order_by(desc(models.BirthdaySurprise.created_at)).limit(15).all()
 
     return schemas.AdminStats(
         total_surprises=total_surprises,
         total_memories=total_memories,
         total_wishes=total_wishes,
-        latest_surprises=latest
+        total_voice_messages=total_voice_messages,
+        latest_surprises=[serialize_surprise_out(s) for s in latest]
     )
 
 
 @app.get("/api/admin/surprises", response_model=List[schemas.BirthdaySurpriseOut])
 def get_all_surprises(db: Session = Depends(get_db)):
-    """List all created surprises for administration."""
-    return db.query(models.BirthdaySurprise).order_by(desc(models.BirthdaySurprise.created_at)).all()
+    surprises = db.query(models.BirthdaySurprise).order_by(desc(models.BirthdaySurprise.created_at)).all()
+    return [serialize_surprise_out(s) for s in surprises]
 
 
 @app.post("/api/admin/seed")
 def seed_demo_data(db: Session = Depends(get_db)):
-    """Seeds a rich demonstration surprise for instant testing."""
     existing = db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.unique_slug == "maya-birthday-magic").first()
     if existing:
         return {"message": "Demo data already exists", "slug": existing.unique_slug}
 
     demo = models.BirthdaySurprise(
+        creator_id="demo-creator-alex",
         unique_slug="maya-birthday-magic",
         recipient_name="Maya",
         sender_name="Alex",
@@ -305,7 +806,11 @@ def seed_demo_data(db: Session = Depends(get_db)):
         birth_date="2000-08-14",
         celebration_date="2026-11-06",
         birthday_message="To the person who makes every day brighter!",
-        birthday_letter="Dearest Maya,\n\nHappy Birthday! Today is all about celebrating you—the rare, kind-hearted, and incredible person who brings so much light into the lives of everyone around you.\n\nWords often fall short when trying to express just how much you mean to me as my best friend. You have been a continuous source of strength, pure joy, and inspiration in ways you might not even realize.\n\nWhat makes you so truly special is your boundless empathy and infectious laugh. Your presence alone has a way of making any room feel warmer and every heavy day feel lighter.\n\nOne of my most cherished memories is our midnight road trip to the coast, singing along to awful 2000s pop music until our voices gave out. I will always hold onto that moment with so much fondness and gratitude.\n\nMay this year ahead bring you profound peace, exhilarating adventures, good health, and the fulfillment of the dreams you hold closest to your heart.\n\nWith all my love and warmest wishes,\nAlex ✨"
+        birthday_letter="Dearest Maya,\n\nHappy Birthday! Today is all about celebrating you—the rare, kind-hearted, and incredible person who brings so much light into the lives of everyone around you.\n\nWords often fall short when trying to express just how much you mean to me as my best friend. You have been a continuous source of strength, pure joy, and inspiration in ways you might not even realize.\n\nWhat makes you so truly special is your boundless empathy and infectious laugh. Your presence alone has a way of making any room feel warmer and every heavy day feel lighter.\n\nOne of my most cherished memories is our midnight road trip to the coast, singing along to awful 2000s pop music until our voices gave out. I will always hold onto that moment with so much fondness and gratitude.\n\nMay this year ahead bring you profound peace, exhilarating adventures, good health, and the fulfillment of the dreams you hold closest to your heart.\n\nWith all my love and warmest wishes,\nAlex ✨",
+        status="published",
+        visibility="unlisted",
+        is_active=True,
+        view_count=12
     )
     db.add(demo)
     db.flush()
@@ -320,7 +825,6 @@ def seed_demo_data(db: Session = Depends(get_db)):
     for q, a in wishes:
         db.add(models.BirthdayWish(surprise_id=demo.id, question=q, answer=a))
 
-    # Add sample memories
     memories = [
         ("https://images.unsplash.com/photo-1517841905240-472988babdf9?w=800&auto=format&fit=crop&q=80", "That unforgettable sunset picnic by the cliffs"),
         ("https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=800&auto=format&fit=crop&q=80", "Laughing until our stomachs hurt in the coffee shop"),
@@ -329,12 +833,36 @@ def seed_demo_data(db: Session = Depends(get_db)):
     for url, cap in memories:
         db.add(models.Memory(surprise_id=demo.id, image_url=url, caption=cap))
 
+    db.add(models.CustomTheme(
+        surprise_id=demo.id,
+        theme_name="dark-galaxy",
+        primary_color="#E85B32",
+        secondary_color="#FFBFA8",
+        background_color="#170D2D",
+        text_color="#FFFFFF",
+        accent_color="#FFD166",
+        card_background="rgba(255, 255, 255, 0.08)",
+        heading_font="Playfair Display",
+        body_font="Poppins",
+        background_type="starry",
+        background_value="radial-gradient(circle at 50% 20%, #2b1055 0%, #170d2d 100%)",
+        animation_settings='{"balloons":true,"hearts":true,"confetti":true,"fireworks":true,"sparkles":true,"stars":true,"typewriter":true,"glow":true,"intensity":"medium"}',
+        music_url="happy-birthday"
+    ))
+
     db.add(models.Setting(
         surprise_id=demo.id,
         music_enabled=True,
-        selected_theme="cosmic-purple",
+        selected_theme="dark-galaxy",
         animation_enabled=True,
         selected_music="happy-birthday"
+    ))
+
+    db.add(models.ShareLink(
+        surprise_id=demo.id,
+        unique_slug="maya-birthday-magic",
+        is_active=True,
+        password_protected=False
     ))
 
     db.commit()
@@ -344,7 +872,6 @@ def seed_demo_data(db: Session = Depends(get_db)):
 
 @app.on_event("startup")
 def on_startup():
-    """Ensure database has initial sample data on launch."""
     from database import SessionLocal
     db = SessionLocal()
     try:
@@ -355,7 +882,7 @@ def on_startup():
         db.close()
 
 
-# Serve compiled frontend build in production (Render single-service deployment)
+# Serve compiled frontend build in production
 FRONTEND_DIST = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "dist"))
 if os.path.exists(FRONTEND_DIST):
     assets_dir = os.path.join(FRONTEND_DIST, "assets")
@@ -370,5 +897,3 @@ if os.path.exists(FRONTEND_DIST):
         if os.path.isfile(file_path):
             return FileResponse(file_path)
         return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
-
-
