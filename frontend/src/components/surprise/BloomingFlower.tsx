@@ -134,3 +134,4 @@ export const BloomingFlower: React.FC<{ size?: number }> = ({ size = 120 }) => {
     </div>
   );
 };
+
