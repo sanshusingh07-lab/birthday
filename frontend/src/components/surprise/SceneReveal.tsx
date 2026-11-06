@@ -3,6 +3,8 @@ import { motion } from 'framer-motion';
 import { Sparkles, Heart, ArrowRight } from 'lucide-react';
 import { fireCelebrationConfetti } from '../../utils/confetti';
 import { sound } from '../../utils/audio';
+import { FlowerPetals } from './FlowerPetals';
+import { BloomingFlower } from './BloomingFlower';
 
 interface SceneRevealProps {
   recipientName: string;
@@ -23,13 +25,16 @@ export const SceneReveal: React.FC<SceneRevealProps> = ({ recipientName, senderN
   }, []);
 
   return (
-    <div className="min-h-[85vh] flex flex-col items-center justify-center text-center px-4 py-8 z-10 relative">
-      {/* Heart-Shaped Floating Balloon Cluster */}
+    <div className="min-h-[85vh] flex flex-col items-center justify-center text-center px-4 py-8 z-10 relative overflow-hidden">
+      {/* 🌸 Blooming Flower Petals Shower Animation */}
+      <FlowerPetals count={32} />
+
+      {/* Heart-Shaped Floating Balloon Cluster with Center Blooming Flower */}
       <motion.div
         initial={{ y: 80, opacity: 0, scale: 0.8 }}
         animate={{ y: 0, opacity: 1, scale: 1 }}
         transition={{ duration: 1.2, ease: "easeOut" }}
-        className="relative mb-8"
+        className="relative mb-4"
       >
         <div className="relative w-56 h-56 sm:w-64 sm:h-64 mx-auto flex items-center justify-center">
           {/* Heart Balloon 1 (Center) */}
@@ -74,15 +79,25 @@ export const SceneReveal: React.FC<SceneRevealProps> = ({ recipientName, senderN
         </div>
       </motion.div>
 
+      {/* 🌸 Centerpiece Blooming Lotus / Rose Flower */}
+      <motion.div
+        initial={{ scale: 0, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        transition={{ delay: 0.4, type: "spring", stiffness: 180, damping: 16 }}
+        className="mb-2"
+      >
+        <BloomingFlower size={110} />
+      </motion.div>
+
       {/* Official Day Announcement */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.8, delay: 0.3 }}
+        transition={{ duration: 0.8, delay: 0.4 }}
         className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/10 border border-white/20 text-[#FFD166] text-xs uppercase tracking-widest font-bold mb-4 backdrop-blur-sm"
       >
         <Sparkles className="w-3.5 h-3.5 text-[#FFD166]" />
-        <span>It's Officially Your Day!</span>
+        <span>🌸 It's Officially Your Day! 🌸</span>
       </motion.div>
 
       {/* Recipient Name Heading */}

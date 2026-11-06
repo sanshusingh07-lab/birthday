@@ -62,7 +62,18 @@ export async function createSurprise(data: BirthdayFormData): Promise<BirthdaySu
     throw new Error(err.detail || 'Failed to create birthday surprise');
   }
 
-  return res.json();
+  const created: BirthdaySurprise = await res.json();
+
+  // Safely persist created surprise in local storage backup
+  try {
+    const existing: BirthdaySurprise[] = JSON.parse(localStorage.getItem('my_created_surprises_backup') || '[]');
+    const filtered = existing.filter(s => s.unique_slug !== created.unique_slug && s.id !== created.id);
+    localStorage.setItem('my_created_surprises_backup', JSON.stringify([created, ...filtered]));
+  } catch (e) {
+    console.warn("Could not save to localStorage backup:", e);
+  }
+
+  return created;
 }
 
 export async function getSurpriseById(id: number): Promise<BirthdaySurprise> {
@@ -147,14 +158,41 @@ export async function uploadTempVoice(
   return res.json();
 }
 
-// Creator surprises list
+// Creator surprises list with resilient local backup merging
 export async function getCreatorSurprises(): Promise<BirthdaySurprise[]> {
   const creatorId = getOrCreateCreatorId();
-  const res = await fetch(`${API_BASE}/creator/surprises?creator_id=${encodeURIComponent(creatorId)}`);
-  if (!res.ok) {
-    throw new Error('Failed to load created surprises');
+  let serverSurprises: BirthdaySurprise[] = [];
+
+  try {
+    const res = await fetch(`${API_BASE}/creator/surprises?creator_id=${encodeURIComponent(creatorId)}`);
+    if (res.ok) {
+      serverSurprises = await res.json();
+    }
+  } catch (err) {
+    console.warn("Backend fetch failed, using local backup:", err);
   }
-  return res.json();
+
+  // Merge with localStorage backup so user NEVER loses their created surprise
+  try {
+    const localBackups: BirthdaySurprise[] = JSON.parse(localStorage.getItem('my_created_surprises_backup') || '[]');
+    const map = new Map<string, BirthdaySurprise>();
+    
+    // Add local items
+    localBackups.forEach(s => {
+      if (s.unique_slug) map.set(s.unique_slug, s);
+    });
+    
+    // Add / overwrite with server items
+    serverSurprises.forEach(s => {
+      if (s.unique_slug) map.set(s.unique_slug, s);
+    });
+
+    const merged = Array.from(map.values());
+    localStorage.setItem('my_created_surprises_backup', JSON.stringify(merged));
+    return merged;
+  } catch (e) {
+    return serverSurprises;
+  }
 }
 
 // Share settings update
@@ -232,6 +270,12 @@ export async function getAdminStats(): Promise<AdminStats> {
 }
 
 export async function deleteSurprise(id: number): Promise<void> {
+  try {
+    const localBackups: BirthdaySurprise[] = JSON.parse(localStorage.getItem('my_created_surprises_backup') || '[]');
+    const filtered = localBackups.filter(s => s.id !== id);
+    localStorage.setItem('my_created_surprises_backup', JSON.stringify(filtered));
+  } catch (e) {}
+
   const res = await fetch(`${API_BASE}/birthday/${id}`, {
     method: 'DELETE'
   });

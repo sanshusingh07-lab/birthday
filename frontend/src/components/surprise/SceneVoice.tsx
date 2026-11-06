@@ -211,3 +211,4 @@ export const SceneVoice: React.FC<SceneVoiceProps> = ({
     </div>
   );
 };
+
