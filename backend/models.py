@@ -18,7 +18,7 @@ class BirthdaySurprise(Base):
     __tablename__ = "birthday_surprises"
 
     id = Column(Integer, primary_key=True, index=True)
-    creator_id = Column(String(120), index=True, nullable=True)  # Creator identifier or session token
+    creator_id = Column(String(120), index=True, nullable=True)
     unique_slug = Column(String(100), unique=True, index=True, nullable=False)
     recipient_name = Column(String(120), nullable=False)
     sender_name = Column(String(120), nullable=False)
@@ -29,8 +29,8 @@ class BirthdaySurprise(Base):
     birthday_letter = Column(Text, nullable=True)
     
     # Status & Access Control
-    status = Column(String(30), default="published")  # "draft", "published"
-    visibility = Column(String(30), default="unlisted")  # "unlisted", "password_protected", "private"
+    status = Column(String(30), default="published")
+    visibility = Column(String(30), default="unlisted")
     password_hash = Column(String(255), nullable=True)
     expires_at = Column(DateTime, nullable=True)
     is_active = Column(Boolean, default=True)
@@ -56,11 +56,12 @@ class VoiceMessage(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     surprise_id = Column(Integer, ForeignKey("birthday_surprises.id", ondelete="CASCADE"), nullable=False, unique=True)
-    audio_url = Column(String(500), nullable=False)
-    audio_format = Column(String(50), default="audio/webm")
+    audio_url = Column(Text, nullable=False)
+    audio_format = Column(String(100), default="audio/webm")
     duration = Column(Float, default=0.0)
-    title = Column(String(200), default="A special voice message for you ❤️")
-    cover_image_url = Column(String(500), nullable=True)
+    title = Column(String(255), default="A special voice message for you ❤️")
+    cover_image_url = Column(Text, nullable=True)
+    audio_data = Column(Text, nullable=True)  # Base64 persistence in database
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     surprise = orm_relationship("BirthdaySurprise", back_populates="voice_message")
@@ -80,7 +81,7 @@ class CustomTheme(Base):
     card_background = Column(String(60), default="rgba(255, 255, 255, 0.08)")
     heading_font = Column(String(60), default="Playfair Display")
     body_font = Column(String(60), default="Poppins")
-    background_type = Column(String(40), default="starry")  # "starry", "gradient", "hearts", "confetti", "particles", "clouds", "floral", "solid"
+    background_type = Column(String(40), default="starry")
     background_value = Column(String(255), default="radial-gradient(circle at 50% 20%, #2b1055 0%, #170d2d 100%)")
     animation_settings = Column(Text, default='{"balloons":true,"hearts":true,"confetti":true,"fireworks":true,"sparkles":true,"stars":true,"typewriter":true,"glow":true,"intensity":"medium"}')
     music_url = Column(String(255), default="happy-birthday")
@@ -105,7 +106,8 @@ class Memory(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     surprise_id = Column(Integer, ForeignKey("birthday_surprises.id", ondelete="CASCADE"), nullable=False)
-    image_url = Column(String(500), nullable=False)
+    image_url = Column(Text, nullable=False)
+    image_data = Column(Text, nullable=True)  # Base64 persistence in database
     caption = Column(String(255), nullable=True)
     uploaded_at = Column(DateTime, default=datetime.datetime.utcnow)
 
@@ -137,3 +139,14 @@ class Setting(Base):
     selected_music = Column(String(60), default="happy-birthday")
 
     surprise = orm_relationship("BirthdaySurprise", back_populates="settings")
+
+
+class PersistentMedia(Base):
+    __tablename__ = "persistent_media"
+
+    id = Column(Integer, primary_key=True, index=True)
+    filename = Column(String(255), unique=True, index=True, nullable=False)
+    media_type = Column(String(50), nullable=False)  # "image", "voice"
+    content_type = Column(String(100), nullable=False)
+    data_base64 = Column(Text, nullable=False)  # Never lost even on container rebuilds!
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)

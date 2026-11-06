@@ -111,12 +111,26 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
     }
   };
 
+  // Helper to convert blob to permanent base64 Data URL
+  const blobToBase64 = (blob: Blob): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  };
+
   // Start live visualizer
   const setupVisualizer = (stream: MediaStream) => {
     try {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
       const audioCtx = new AudioCtx();
       audioContextRef.current = audioCtx;
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 64;
       analyserRef.current = analyser;
@@ -168,20 +182,47 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
     }
   };
 
+  // Trigger visualizer when canvas mounts while recording
+  useEffect(() => {
+    if (isRecording && streamRef.current) {
+      const timer = setTimeout(() => {
+        if (streamRef.current) {
+          setupVisualizer(streamRef.current);
+        }
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [isRecording]);
+
   const handleStartRecording = async () => {
     setErrorMsg(null);
+    if (!navigator || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setErrorMsg("Your browser does not support microphone recording or is running in an insecure HTTP context. Please open using HTTPS or upload an audio file below.");
+      setHasMicPermission(false);
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       setHasMicPermission(true);
 
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : MediaRecorder.isTypeSupported('audio/webm')
-        ? 'audio/webm'
-        : MediaRecorder.isTypeSupported('audio/mp4')
-        ? 'audio/mp4'
-        : '';
+      let mimeType = '';
+      const candidateTypes = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4',
+        'audio/aac',
+        'audio/ogg'
+      ];
+      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported) {
+        for (const type of candidateTypes) {
+          if (MediaRecorder.isTypeSupported(type)) {
+            mimeType = type;
+            break;
+          }
+        }
+      }
 
       const options = mimeType ? { mimeType } : undefined;
       const mediaRecorder = new MediaRecorder(stream, options);
@@ -189,7 +230,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
       audioChunksRef.current = [];
 
       mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
+        if (event.data && event.data.size > 0) {
           audioChunksRef.current.push(event.data);
         }
       };
@@ -202,6 +243,14 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
         setAudioUrl(recordedUrl);
         setDuration(recordingTime);
 
+        // Convert to base64 Data URL first for permanent reliability across devices
+        let base64Audio = '';
+        try {
+          base64Audio = await blobToBase64(recordedBlob);
+        } catch (b64Err) {
+          console.warn("Failed base64 conversion:", b64Err);
+        }
+
         // Upload to backend
         setIsUploading(true);
         try {
@@ -209,9 +258,11 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
           setAudioUrl(res.audio_url);
           onVoiceChange(res);
         } catch (uploadErr: any) {
-          setErrorMsg("Saved locally, but failed to upload to server. You can still preview.");
+          console.warn("Upload fallback using base64 persistence:", uploadErr);
+          const persistentUrl = base64Audio || recordedUrl;
+          setAudioUrl(persistentUrl);
           onVoiceChange({
-            audio_url: recordedUrl,
+            audio_url: persistentUrl,
             audio_format: actualType,
             duration: recordingTime,
             title: voiceTitle
@@ -231,10 +282,9 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
       setIsPaused(false);
       setRecordingTime(0);
       startTimer();
-      setupVisualizer(stream);
     } catch (err: any) {
       setHasMicPermission(false);
-      setErrorMsg("Microphone access was denied or not found. You can also upload an existing audio file below.");
+      setErrorMsg("Microphone access was denied or not found. Please allow microphone permissions in your browser or upload an existing audio file below.");
     }
   };
 
@@ -280,7 +330,11 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
     setErrorMsg(null);
     setIsUploading(true);
     try {
-      // Calculate audio duration via audio element
+      let base64Audio = '';
+      try {
+        base64Audio = await blobToBase64(file);
+      } catch (e) {}
+
       const localUrl = URL.createObjectURL(file);
       const tempAudio = new Audio(localUrl);
       
@@ -293,9 +347,10 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
           setAudioUrl(res.audio_url);
           onVoiceChange(res);
         } catch (err: any) {
-          setAudioUrl(localUrl);
+          const persistentUrl = base64Audio || localUrl;
+          setAudioUrl(persistentUrl);
           onVoiceChange({
-            audio_url: localUrl,
+            audio_url: persistentUrl,
             audio_format: file.type || 'audio/mp3',
             duration: fileDuration,
             title: voiceTitle
@@ -310,7 +365,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
     }
   };
 
-  // Playback control
+  // Playback control with promise safety
   const togglePlay = () => {
     if (!audioPlayerRef.current || !audioUrl) return;
 
@@ -318,8 +373,17 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
       audioPlayerRef.current.pause();
       setIsPlaying(false);
     } else {
-      audioPlayerRef.current.play();
-      setIsPlaying(true);
+      const playPromise = audioPlayerRef.current.play();
+      if (playPromise !== undefined) {
+        playPromise.then(() => {
+          setIsPlaying(true);
+        }).catch((err) => {
+          console.warn("Audio play prevented:", err);
+          setIsPlaying(false);
+        });
+      } else {
+        setIsPlaying(true);
+      }
     }
   };
 

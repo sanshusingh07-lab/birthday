@@ -22,6 +22,7 @@ export const SceneVoice: React.FC<SceneVoiceProps> = ({
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [hasListened, setHasListened] = useState<boolean>(false);
+  const [audioError, setAudioError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const duration = voiceMessage.duration || 0;
@@ -34,18 +35,24 @@ export const SceneVoice: React.FC<SceneVoiceProps> = ({
 
   const handleTogglePlay = () => {
     if (!audioRef.current) return;
+    setAudioError(null);
 
     if (isPlaying) {
       audioRef.current.pause();
       setIsPlaying(false);
     } else {
-      audioRef.current.play().then(() => {
-        setIsPlaying(true);
-        setHasListened(true);
-        sound.playSparkle();
-      }).catch(err => {
-        console.warn("Audio playback notice:", err);
-      });
+      const playPromise = audioRef.current.play();
+      if (playPromise !== undefined) {
+        playPromise.then(() => {
+          setIsPlaying(true);
+          setHasListened(true);
+          sound.playSparkle();
+        }).catch(err => {
+          console.warn("Audio playback notice:", err);
+          setIsPlaying(false);
+          setAudioError("Tap again to play audio");
+        });
+      }
     }
   };
 
@@ -55,6 +62,7 @@ export const SceneVoice: React.FC<SceneVoiceProps> = ({
       <audio
         ref={audioRef}
         src={voiceMessage.audio_url}
+        onError={() => setAudioError("Could not stream audio. Please tap play again.")}
         onTimeUpdate={(e) => setCurrentTime((e.target as HTMLAudioElement).currentTime)}
         onEnded={() => {
           setIsPlaying(false);

@@ -18,10 +18,15 @@ export const SceneGallery: React.FC<SceneGalleryProps> = ({
   onPrev
 }) => {
   const [selectedImage, setSelectedImage] = useState<MemoryItem | null>(null);
+  const [failedImages, setFailedImages] = useState<Record<number, boolean>>({});
 
   const handleOpenPhoto = (m: MemoryItem) => {
     sound.playSparkle();
     setSelectedImage(m);
+  };
+
+  const handleImageError = (index: number) => {
+    setFailedImages(prev => ({ ...prev, [index]: true }));
   };
 
   return (
@@ -65,12 +70,24 @@ export const SceneGallery: React.FC<SceneGalleryProps> = ({
                 <div className="absolute -top-3 left-1/2 -translate-x-1/2 w-16 h-5 bg-amber-100/70 border border-amber-200/50 backdrop-blur-xs rounded-xs rotate-1 shadow-xs" />
 
                 {/* Photo Image */}
-                <div className="relative aspect-4/3 rounded-lg overflow-hidden bg-gray-100 mb-3">
-                  <img
-                    src={item.image_url}
-                    alt={item.caption || "Memory"}
-                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                  />
+                <div className="relative aspect-4/3 rounded-lg overflow-hidden bg-gradient-to-tr from-[#FFF6F0] to-[#FFBFA8]/40 mb-3">
+                  {!failedImages[index] ? (
+                    <img
+                      src={item.image_url}
+                      alt={item.caption || `Memory moment ${index + 1} with ${recipientName}`}
+                      loading="lazy"
+                      onError={() => handleImageError(index)}
+                      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex flex-col items-center justify-center p-4 bg-gradient-to-br from-[#FFE8DF] via-[#FFF0EA] to-[#FFD5C6] text-center">
+                      <div className="w-12 h-12 rounded-full bg-white/80 shadow-md flex items-center justify-center mb-2 text-[#E85B32]">
+                        <ImageIcon className="w-6 h-6" />
+                      </div>
+                      <span className="text-xs font-bold text-[#38251F]/80">Precious Memory ✨</span>
+                    </div>
+                  )}
+
                   <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
                     <span className="p-2.5 rounded-full bg-white/90 text-[#38251F] shadow-lg">
                       <Maximize2 className="w-4 h-4" />
@@ -138,10 +155,14 @@ export const SceneGallery: React.FC<SceneGalleryProps> = ({
                 <X className="w-5 h-5" />
               </button>
 
-              <div className="rounded-2xl overflow-hidden max-h-[70vh] bg-black/5 mb-4">
+              <div className="rounded-2xl overflow-hidden max-h-[70vh] bg-black/5 mb-4 flex items-center justify-center">
                 <img
                   src={selectedImage.image_url}
                   alt={selectedImage.caption || "Expanded memory"}
+                  onError={(e) => {
+                    // Replace with graceful placeholder if fails in modal
+                    (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=800&auto=format&fit=crop&q=80";
+                  }}
                   className="w-full h-full object-contain mx-auto"
                 />
               </div>

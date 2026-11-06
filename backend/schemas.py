@@ -25,6 +25,7 @@ class WishOut(WishBase):
 # ==========================================
 class MemoryBase(BaseModel):
     image_url: str
+    image_data: Optional[str] = None
     caption: Optional[str] = None
 
 class MemoryCreate(MemoryBase):
@@ -48,6 +49,7 @@ class VoiceMessageBase(BaseModel):
     duration: Optional[float] = 0.0
     title: Optional[str] = "A special voice message for you ❤️"
     cover_image_url: Optional[str] = None
+    audio_data: Optional[str] = None
 
 class VoiceMessageCreate(VoiceMessageBase):
     pass

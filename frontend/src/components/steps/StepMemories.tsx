@@ -40,7 +40,15 @@ export const StepMemories: React.FC = () => {
           continue;
         }
 
-        // Upload to server or use object URL
+        // Read file as Base64 Data URL so it is NEVER lost across devices
+        const base64DataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+
+        // Upload to server or use base64 Data URL
         try {
           const uploadedUrl = await uploadTempPhoto(file);
           addMemory({
@@ -49,10 +57,9 @@ export const StepMemories: React.FC = () => {
           });
           sound.playSparkle();
         } catch (e) {
-          // Fallback to local object URL if backend fails
-          const objectUrl = URL.createObjectURL(file);
+          // Fallback to permanent base64 Data URL (never ephemeral blob: which breaks on other phones!)
           addMemory({
-            image_url: objectUrl,
+            image_url: base64DataUrl,
             caption: ""
           });
           sound.playSparkle();

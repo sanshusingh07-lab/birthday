@@ -5,9 +5,11 @@ import shutil
 import secrets
 import hashlib
 import datetime
+import base64
+import mimetypes
 from typing import List, Optional
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, status, Header
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -27,6 +29,25 @@ VOICE_DIR = os.path.join(UPLOAD_DIR, "voice")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(VOICE_DIR, exist_ok=True)
 
+# Optional Cloudinary Support
+CLOUDINARY_CONFIGURED = False
+try:
+    import cloudinary
+    import cloudinary.uploader
+    cloudinary_url = os.getenv("CLOUDINARY_URL")
+    cloud_name = os.getenv("CLOUDINARY_CLOUD_NAME")
+    if cloudinary_url or cloud_name:
+        if cloud_name:
+            cloudinary.config(
+                cloud_name=cloud_name,
+                api_key=os.getenv("CLOUDINARY_API_KEY"),
+                api_secret=os.getenv("CLOUDINARY_API_SECRET"),
+                secure=True
+            )
+        CLOUDINARY_CONFIGURED = True
+except Exception as e:
+    print(f"Cloudinary notice: {e}")
+
 app = FastAPI(
     title="Birthday Surprise Platform API",
     description="Backend API for creating, customizing, and sharing personalized birthday surprises with voice messages and custom themes",
@@ -42,8 +63,89 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static uploads
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
+def save_persistent_media(filename: str, media_type: str, content_type: str, raw_bytes: bytes, db: Session) -> str:
+    """Save raw media bytes to local disk cache AND PostgreSQL PersistentMedia table for 100% durability across Render restarts."""
+    target_dir = VOICE_DIR if media_type == "voice" else UPLOAD_DIR
+    os.makedirs(target_dir, exist_ok=True)
+    file_path = os.path.join(target_dir, filename)
+    try:
+        with open(file_path, "wb") as f:
+            f.write(raw_bytes)
+    except Exception as e:
+        print(f"Disk cache write notice: {e}")
+
+    b64_str = base64.b64encode(raw_bytes).decode("utf-8")
+    existing = db.query(models.PersistentMedia).filter(models.PersistentMedia.filename == filename).first()
+    if existing:
+        existing.data_base64 = b64_str
+        existing.content_type = content_type
+        existing.media_type = media_type
+    else:
+        new_pm = models.PersistentMedia(
+            filename=filename,
+            media_type=media_type,
+            content_type=content_type,
+            data_base64=b64_str
+        )
+        db.add(new_pm)
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"PersistentMedia commit notice: {e}")
+    return b64_str
+
+
+@app.get("/uploads/{media_path:path}")
+async def serve_uploaded_media(media_path: str, db: Session = Depends(get_db)):
+    """Dynamically serve uploaded photos and voice recordings from disk cache or PostgreSQL persistent storage."""
+    file_path = os.path.join(UPLOAD_DIR, media_path)
+    if os.path.isfile(file_path):
+        mtype, _ = mimetypes.guess_type(file_path)
+        return FileResponse(file_path, media_type=mtype or "application/octet-stream")
+
+    fname = os.path.basename(media_path)
+    # 1. Check PersistentMedia table
+    pm = db.query(models.PersistentMedia).filter(models.PersistentMedia.filename == fname).first()
+    if pm and pm.data_base64:
+        try:
+            raw_bytes = base64.b64decode(pm.data_base64)
+            try:
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                with open(file_path, "wb") as f:
+                    f.write(raw_bytes)
+            except Exception:
+                pass
+            return Response(
+                content=raw_bytes,
+                media_type=pm.content_type or "application/octet-stream",
+                headers={"Cache-Control": "public, max-age=86400"}
+            )
+        except Exception as e:
+            print(f"Error serving persistent media {fname}: {e}")
+
+    # 2. Check Memory image_data
+    mem = db.query(models.Memory).filter(models.Memory.image_url.like(f"%{fname}%")).first()
+    if mem and mem.image_data:
+        try:
+            raw_data = mem.image_data.split(",", 1)[1] if "," in mem.image_data else mem.image_data
+            raw_bytes = base64.b64decode(raw_data)
+            return Response(content=raw_bytes, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+        except Exception:
+            pass
+
+    # 3. Check VoiceMessage audio_data
+    vm = db.query(models.VoiceMessage).filter(models.VoiceMessage.audio_url.like(f"%{fname}%")).first()
+    if vm and vm.audio_data:
+        try:
+            raw_data = vm.audio_data.split(",", 1)[1] if "," in vm.audio_data else vm.audio_data
+            raw_bytes = base64.b64decode(raw_data)
+            return Response(content=raw_bytes, media_type=vm.audio_format or "audio/webm", headers={"Cache-Control": "public, max-age=86400"})
+        except Exception:
+            pass
+
+    raise HTTPException(status_code=404, detail="Media file not found")
 
 
 # ==========================================
@@ -162,22 +264,64 @@ def create_birthday_surprise(surprise_in: schemas.BirthdaySurpriseCreate, db: Se
             )
             db.add(wish)
 
-    # Add memories
+    # Add memories with persistent backup
     if surprise_in.memories:
         for m in surprise_in.memories:
+            img_url = m.image_url
+            img_data = getattr(m, 'image_data', None)
+            if img_url and img_url.startswith("data:image"):
+                ext = ".png" if "data:image/png" in img_url else ".webp" if "data:image/webp" in img_url else ".jpg"
+                fname = f"memory_b64_{uuid.uuid4().hex[:10]}{ext}"
+                b64_content = img_url.split(",", 1)[1] if "," in img_url else img_url
+                try:
+                    raw_b = base64.b64decode(b64_content)
+                    save_persistent_media(fname, "image", f"image/{ext.lstrip('.')}", raw_b, db)
+                    img_url = f"/uploads/{fname}"
+                    img_data = b64_content
+                except Exception as e:
+                    print(f"Error persisting base64 memory image: {e}")
+            elif img_url and img_url.startswith("/uploads/"):
+                fname = os.path.basename(img_url)
+                pm = db.query(models.PersistentMedia).filter(models.PersistentMedia.filename == fname).first()
+                if pm:
+                    img_data = pm.data_base64
+
             memory = models.Memory(
                 surprise_id=surprise.id,
-                image_url=m.image_url,
+                image_url=img_url,
+                image_data=img_data,
                 caption=m.caption
             )
             db.add(memory)
 
-    # Add Voice Message if provided
+    # Add Voice Message if provided with persistent backup
     if surprise_in.voice_message:
+        aud_url = surprise_in.voice_message.audio_url
+        aud_data = getattr(surprise_in.voice_message, 'audio_data', None)
+        aud_format = surprise_in.voice_message.audio_format or "audio/webm"
+
+        if aud_url and aud_url.startswith("data:audio"):
+            ext = ".mp4" if "mp4" in aud_url or "m4a" in aud_url else ".webm"
+            fname = f"voice_b64_{uuid.uuid4().hex[:10]}{ext}"
+            b64_content = aud_url.split(",", 1)[1] if "," in aud_url else aud_url
+            try:
+                raw_b = base64.b64decode(b64_content)
+                save_persistent_media(fname, "voice", aud_format, raw_b, db)
+                aud_url = f"/uploads/voice/{fname}"
+                aud_data = b64_content
+            except Exception as e:
+                print(f"Error persisting base64 voice message: {e}")
+        elif aud_url and aud_url.startswith("/uploads/"):
+            fname = os.path.basename(aud_url)
+            pm = db.query(models.PersistentMedia).filter(models.PersistentMedia.filename == fname).first()
+            if pm:
+                aud_data = pm.data_base64
+
         vm = models.VoiceMessage(
             surprise_id=surprise.id,
-            audio_url=surprise_in.voice_message.audio_url,
-            audio_format=surprise_in.voice_message.audio_format or "audio/webm",
+            audio_url=aud_url,
+            audio_data=aud_data,
+            audio_format=aud_format,
             duration=surprise_in.voice_message.duration or 0.0,
             title=surprise_in.voice_message.title or "A special voice message for you ❤️",
             cover_image_url=surprise_in.voice_message.cover_image_url
@@ -332,29 +476,40 @@ def get_creator_surprises(creator_id: Optional[str] = None, db: Session = Depend
 async def upload_temp_voice(
     file: UploadFile = File(...),
     duration: Optional[float] = Form(0.0),
-    title: Optional[str] = Form("A special voice message for you ❤️")
+    title: Optional[str] = Form("A special voice message for you ❤️"),
+    db: Session = Depends(get_db)
 ):
     """Upload voice recording prior to surprise creation (returns audio URL)."""
-    allowed_exts = {".webm", ".mp3", ".wav", ".m4a", ".ogg"}
+    allowed_exts = {".webm", ".mp3", ".wav", ".m4a", ".ogg", ".mp4", ".aac"}
     filename = file.filename or "recording.webm"
     ext = os.path.splitext(filename)[1].lower()
     if not ext or ext not in allowed_exts:
         ext = ".webm"
 
     unique_name = f"voice_temp_{uuid.uuid4().hex}{ext}"
-    file_path = os.path.join(VOICE_DIR, unique_name)
+    content_type = file.content_type or f"audio/{ext.lstrip('.')}"
+    raw_bytes = await file.read()
 
-    try:
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save voice recording: {str(e)}")
+    audio_url = f"/uploads/voice/{unique_name}"
+    if CLOUDINARY_CONFIGURED:
+        try:
+            result = cloudinary.uploader.upload(
+                raw_bytes,
+                resource_type="video",
+                folder="birthday_surprises/voice"
+            )
+            if result.get("secure_url"):
+                audio_url = result["secure_url"]
+        except Exception as e:
+            print(f"Cloudinary voice upload error, using DB fallback: {e}")
+
+    save_persistent_media(unique_name, "voice", content_type, raw_bytes, db)
 
     return {
-        "audio_url": f"/uploads/voice/{unique_name}",
-        "audio_format": file.content_type or f"audio/{ext.lstrip('.')}",
-        "duration": duration,
-        "title": title
+        "audio_url": audio_url,
+        "audio_format": content_type,
+        "duration": duration or 0.0,
+        "title": title or "A special voice message for you ❤️"
     }
 
 
@@ -371,33 +526,47 @@ async def upload_birthday_voice(
     if not surprise:
         raise HTTPException(status_code=404, detail="Birthday surprise not found")
 
+    allowed_exts = {".webm", ".mp3", ".wav", ".m4a", ".ogg", ".mp4", ".aac"}
     filename = file.filename or "recording.webm"
     ext = os.path.splitext(filename)[1].lower() or ".webm"
-    unique_name = f"voice_{id}_{uuid.uuid4().hex[:8]}{ext}"
-    file_path = os.path.join(VOICE_DIR, unique_name)
+    if ext not in allowed_exts:
+        ext = ".webm"
 
-    try:
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save voice recording: {str(e)}")
+    unique_name = f"voice_{id}_{uuid.uuid4().hex[:8]}{ext}"
+    content_type = file.content_type or f"audio/{ext.lstrip('.')}"
+    raw_bytes = await file.read()
 
     audio_url = f"/uploads/voice/{unique_name}"
+    if CLOUDINARY_CONFIGURED:
+        try:
+            result = cloudinary.uploader.upload(
+                raw_bytes,
+                resource_type="video",
+                folder="birthday_surprises/voice"
+            )
+            if result.get("secure_url"):
+                audio_url = result["secure_url"]
+        except Exception as e:
+            print(f"Cloudinary voice upload error, using DB fallback: {e}")
+
+    b64_data = save_persistent_media(unique_name, "voice", content_type, raw_bytes, db)
 
     # Upsert VoiceMessage
     vm = db.query(models.VoiceMessage).filter(models.VoiceMessage.surprise_id == surprise.id).first()
     if vm:
         vm.audio_url = audio_url
-        vm.audio_format = file.content_type or f"audio/{ext.lstrip('.')}"
+        vm.audio_format = content_type
         vm.duration = duration or vm.duration
         vm.title = title or vm.title
+        vm.audio_data = b64_data
     else:
         vm = models.VoiceMessage(
             surprise_id=surprise.id,
             audio_url=audio_url,
-            audio_format=file.content_type or f"audio/{ext.lstrip('.')}",
-            duration=duration,
-            title=title
+            audio_format=content_type,
+            duration=duration or 0.0,
+            title=title or "A special voice message for you ❤️",
+            audio_data=b64_data
         )
         db.add(vm)
 
@@ -699,23 +868,33 @@ async def upload_birthday_photo(
         raise HTTPException(status_code=404, detail="Birthday surprise not found")
 
     allowed_extensions = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-    ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in allowed_extensions:
-        raise HTTPException(status_code=400, detail="Invalid image format. Supported: JPG, PNG, WEBP, GIF.")
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if not ext or ext not in allowed_extensions:
+        ext = ".jpg"
 
     filename = f"memory_{id}_{uuid.uuid4().hex[:8]}{ext}"
-    file_path = os.path.join(UPLOAD_DIR, filename)
-
-    try:
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save image: {str(e)}")
+    content_type = file.content_type or f"image/{ext.lstrip('.')}"
+    raw_bytes = await file.read()
 
     image_url = f"/uploads/{filename}"
+    if CLOUDINARY_CONFIGURED:
+        try:
+            result = cloudinary.uploader.upload(
+                raw_bytes,
+                resource_type="image",
+                folder="birthday_surprises/photos"
+            )
+            if result.get("secure_url"):
+                image_url = result["secure_url"]
+        except Exception as e:
+            print(f"Cloudinary image upload error, using DB fallback: {e}")
+
+    b64_data = save_persistent_media(filename, "image", content_type, raw_bytes, db)
+
     memory = models.Memory(
         surprise_id=surprise.id,
         image_url=image_url,
+        image_data=b64_data,
         caption=caption
     )
     db.add(memory)
@@ -726,25 +905,34 @@ async def upload_birthday_photo(
 
 @app.post("/api/birthday/upload-temp")
 async def upload_temp_photo(
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
 ):
     allowed_extensions = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-    ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in allowed_extensions:
-        raise HTTPException(status_code=400, detail="Invalid image format. Supported: JPG, PNG, WEBP, GIF.")
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if not ext or ext not in allowed_extensions:
+        ext = ".jpg"
 
     filename = f"temp_{uuid.uuid4().hex}{ext}"
-    file_path = os.path.join(UPLOAD_DIR, filename)
+    content_type = file.content_type or f"image/{ext.lstrip('.')}"
+    raw_bytes = await file.read()
 
-    try:
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save image: {str(e)}")
+    image_url = f"/uploads/{filename}"
+    if CLOUDINARY_CONFIGURED:
+        try:
+            result = cloudinary.uploader.upload(
+                raw_bytes,
+                resource_type="image",
+                folder="birthday_surprises/photos"
+            )
+            if result.get("secure_url"):
+                image_url = result["secure_url"]
+        except Exception as e:
+            print(f"Cloudinary temp image upload error, using DB fallback: {e}")
 
-    return {"image_url": f"/uploads/{filename}"}
+    save_persistent_media(filename, "image", content_type, raw_bytes, db)
 
-
+    return {"image_url": image_url}
 # ==========================================
 # AI LETTER GENERATION
 # ==========================================
