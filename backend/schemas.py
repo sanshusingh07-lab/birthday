@@ -78,9 +78,9 @@ class CustomThemeBase(BaseModel):
     body_font: str = "Poppins"
     background_type: str = "starry"
     background_value: str = "radial-gradient(circle at 50% 20%, #2b1055 0%, #170d2d 100%)"
-    animation_settings: Optional[str] = '{"balloons":true,"hearts":true,"confetti":true,"fireworks":true,"sparkles":true,"stars":true,"typewriter":true,"glow":true,"intensity":"medium"}'
+    animation_settings: Optional[Any] = '{"balloons":true,"hearts":true,"confetti":true,"fireworks":true,"sparkles":true,"stars":true,"typewriter":true,"glow":true,"intensity":"medium"}'
     music_url: Optional[str] = "happy-birthday"
-    custom_settings: Optional[str] = "{}"
+    custom_settings: Optional[Any] = "{}"
 
 class CustomThemeCreate(CustomThemeBase):
     pass
@@ -258,3 +258,30 @@ class AdminStats(BaseModel):
     total_wishes: int
     total_voice_messages: int = 0
     latest_surprises: List[BirthdaySurpriseOut]
+
+
+# ==========================================
+# USER & AUTH SCHEMAS
+# ==========================================
+class UserRegister(BaseModel):
+    name: str = Field(..., min_length=1)
+    email: str = Field(..., min_length=3)
+    password: str = Field(..., min_length=4)
+
+class UserLogin(BaseModel):
+    email: str = Field(..., min_length=3)
+    password: str = Field(..., min_length=1)
+
+class UserOut(BaseModel):
+    id: int
+    name: str
+    email: str
+    created_at: datetime.datetime
+
+    class Config:
+        from_attributes = True
+
+class AuthResponse(BaseModel):
+    token: str
+    user: UserOut
+    message: str = "Success"

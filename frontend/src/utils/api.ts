@@ -11,8 +11,109 @@ import {
 
 const API_BASE = '/api';
 
+// ==========================================
+// AUTH STATE & HELPERS
+// ==========================================
+export interface UserProfile {
+  id: number;
+  name: string;
+  email: string;
+  created_at?: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: UserProfile;
+  message: string;
+}
+
+export function getAuthToken(): string | null {
+  return localStorage.getItem('birthday_auth_token');
+}
+
+export function setAuthToken(token: string): void {
+  localStorage.setItem('birthday_auth_token', token);
+}
+
+export function removeAuthToken(): void {
+  localStorage.removeItem('birthday_auth_token');
+}
+
+export function getStoredUser(): UserProfile | null {
+  try {
+    const raw = localStorage.getItem('birthday_auth_user');
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredUser(user: UserProfile): void {
+  localStorage.setItem('birthday_auth_user', JSON.stringify(user));
+}
+
+export function removeStoredUser(): void {
+  localStorage.removeItem('birthday_auth_user');
+}
+
+export async function registerUser(name: string, email: string, password: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, email, password })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to create account' }));
+    throw new Error(err.detail || 'Registration failed');
+  }
+  const data: AuthResponse = await res.json();
+  setAuthToken(data.token);
+  setStoredUser(data.user);
+  return data;
+}
+
+export async function loginUser(email: string, password: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Invalid email or password' }));
+    throw new Error(err.detail || 'Login failed');
+  }
+  const data: AuthResponse = await res.json();
+  setAuthToken(data.token);
+  setStoredUser(data.user);
+  return data;
+}
+
+export async function fetchCurrentUser(): Promise<UserProfile | null> {
+  const token = getAuthToken();
+  if (!token) return null;
+  try {
+    const res = await fetch(`${API_BASE}/auth/me`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (!res.ok) {
+      removeAuthToken();
+      removeStoredUser();
+      return null;
+    }
+    const data = await res.json();
+    setStoredUser(data.user);
+    return data.user;
+  } catch {
+    return getStoredUser();
+  }
+}
+
 // Creator ID helper (saved in localStorage for the browser session)
 export function getOrCreateCreatorId(): string {
+  const user = getStoredUser();
+  if (user && user.id) {
+    return `user_${user.id}`;
+  }
   let cid = localStorage.getItem('birthday_creator_id');
   if (!cid) {
     cid = 'creator_' + Math.random().toString(36).substring(2, 12) + Date.now().toString(36);
@@ -23,7 +124,15 @@ export function getOrCreateCreatorId(): string {
 
 export async function createSurprise(data: BirthdayFormData): Promise<BirthdaySurprise> {
   const creatorId = getOrCreateCreatorId();
+  const token = getAuthToken();
   
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
+  };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   const payload = {
     creator_id: creatorId,
     recipient_name: data.recipient_name,
@@ -33,17 +142,16 @@ export async function createSurprise(data: BirthdayFormData): Promise<BirthdaySu
     celebration_date: data.celebration_date || null,
     birthday_message: data.birthday_message || null,
     birthday_letter: data.birthday_letter || null,
-    wishes: data.wishes.filter(w => w.answer.trim().length > 0),
-    memories: data.memories.map(m => ({
+    wishes: (data.wishes || []).filter(w => w && w.answer && typeof w.answer === 'string' && w.answer.trim().length > 0),
+    memories: (data.memories || []).map(m => ({
       image_url: m.image_url,
       caption: m.caption || null
     })),
     voice_message: data.voice_message || null,
     custom_theme: data.custom_theme ? {
       ...data.custom_theme,
-      animation_settings: typeof data.custom_theme.animation_settings === 'string'
-        ? data.custom_theme.animation_settings
-        : JSON.stringify(data.custom_theme.animation_settings)
+      animation_settings: data.custom_theme.animation_settings || null,
+      custom_settings: data.custom_theme.custom_settings || {}
     } : null,
     settings: data.settings,
     visibility: data.visibility || 'unlisted',
@@ -53,7 +161,7 @@ export async function createSurprise(data: BirthdayFormData): Promise<BirthdaySu
 
   const res = await fetch(`${API_BASE}/birthday/create`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(payload)
   });
 
@@ -161,10 +269,16 @@ export async function uploadTempVoice(
 // Creator surprises list with resilient local backup merging
 export async function getCreatorSurprises(): Promise<BirthdaySurprise[]> {
   const creatorId = getOrCreateCreatorId();
+  const token = getAuthToken();
   let serverSurprises: BirthdaySurprise[] = [];
 
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   try {
-    const res = await fetch(`${API_BASE}/creator/surprises?creator_id=${encodeURIComponent(creatorId)}`);
+    const res = await fetch(`${API_BASE}/creator/surprises?creator_id=${encodeURIComponent(creatorId)}`, { headers });
     if (res.ok) {
       serverSurprises = await res.json();
     }

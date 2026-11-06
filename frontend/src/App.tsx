@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BirthdayProvider, useBirthday } from './context/BirthdayContext';
+import { AuthProvider } from './context/AuthContext';
+import { AuthModal } from './components/auth/AuthModal';
 import { Navbar } from './components/Navbar';
 import { FloatingElements } from './components/FloatingElements';
 
@@ -149,8 +151,11 @@ const AppContent: React.FC = () => {
 
 export default function App() {
   return (
-    <BirthdayProvider>
-      <AppContent />
-    </BirthdayProvider>
+    <AuthProvider>
+      <BirthdayProvider>
+        <AppContent />
+        <AuthModal />
+      </BirthdayProvider>
+    </AuthProvider>
   );
 }

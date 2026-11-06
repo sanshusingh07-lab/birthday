@@ -7,9 +7,13 @@ import {
   Volume2, 
   VolumeX, 
   ShieldCheck, 
-  Eye 
+  Eye,
+  LogIn,
+  LogOut,
+  UserCircle2
 } from 'lucide-react';
 import { useBirthday } from '../context/BirthdayContext';
+import { useAuth } from '../context/AuthContext';
 
 export const Navbar: React.FC = () => {
   const {
@@ -25,6 +29,7 @@ export const Navbar: React.FC = () => {
     isAdminMode,
     setIsAdminMode
   } = useBirthday();
+  const { isAuthenticated, user, openAuthModal, logout } = useAuth();
 
   return (
     <header className="sticky top-0 z-40 backdrop-blur-md bg-[#FFF6F0]/85 border-b border-[#FFBFA8]/40 text-[#38251F]">
@@ -149,6 +154,39 @@ export const Navbar: React.FC = () => {
           >
             <ShieldCheck className="w-4 h-4" />
           </button>
+
+          {/* Auth Buttons */}
+          {isAuthenticated && user ? (
+            <div className="flex items-center gap-2">
+              <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#E85B32]/10 border border-[#E85B32]/25">
+                <UserCircle2 className="w-3.5 h-3.5 text-[#E85B32]" />
+                <span className="text-xs font-semibold text-[#38251F] max-w-[80px] truncate">{user.name}</span>
+              </div>
+              <button
+                onClick={logout}
+                className="p-2 rounded-full border bg-white/80 text-gray-500 border-[#FFBFA8] hover:text-rose-500 hover:border-rose-300 transition-all flex items-center justify-center cursor-pointer"
+                title="Sign Out"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => openAuthModal('login')}
+                className="px-3 py-1.5 rounded-full text-xs font-semibold text-[#E85B32] border border-[#E85B32]/40 hover:bg-[#E85B32]/10 transition-all cursor-pointer"
+              >
+                Sign In
+              </button>
+              <button
+                onClick={() => openAuthModal('register')}
+                className="px-3 py-1.5 rounded-full text-xs font-semibold bg-gradient-to-r from-[#E85B32] to-[#F7A6A0] text-white shadow-sm hover:shadow-md transition-all flex items-center gap-1 cursor-pointer"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                Sign Up
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </header>

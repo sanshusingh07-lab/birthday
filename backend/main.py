@@ -5,6 +5,7 @@ import shutil
 import secrets
 import hashlib
 import datetime
+import json
 import base64
 import mimetypes
 from typing import List, Optional
@@ -175,6 +176,41 @@ def verify_password(password: str, stored_hash: Optional[str]) -> bool:
     test_hashed = hashlib.sha256((salt + password).encode('utf-8')).hexdigest()
     return test_hashed == hashed
 
+AUTH_SECRET = os.getenv("SECRET_KEY", "birthday_magic_secret_9837482910")
+
+def create_user_token(user_id: int) -> str:
+    """Generate stateless, secure signed session token."""
+    ts = int(datetime.datetime.utcnow().timestamp())
+    raw = f"{user_id}:{ts}"
+    signature = hashlib.sha256(f"{raw}:{AUTH_SECRET}".encode()).hexdigest()
+    return f"{raw}:{signature}"
+
+def verify_user_token(token: str) -> Optional[int]:
+    """Verify signed session token and return user_id."""
+    try:
+        parts = token.strip().split(":")
+        if len(parts) != 3:
+            return None
+        user_id = int(parts[0])
+        ts = int(parts[1])
+        signature = parts[2]
+        expected = hashlib.sha256(f"{user_id}:{ts}:{AUTH_SECRET}".encode()).hexdigest()
+        if signature == expected:
+            return user_id
+    except Exception:
+        return None
+    return None
+
+def get_current_user_optional(authorization: Optional[str] = Header(None), db: Session = Depends(get_db)) -> Optional[models.User]:
+    """Extract authenticated user if Authorization header present."""
+    if not authorization:
+        return None
+    token = authorization.replace("Bearer ", "").strip()
+    user_id = verify_user_token(token)
+    if not user_id:
+        return None
+    return db.query(models.User).filter(models.User.id == user_id).first()
+
 def serialize_surprise_out(surprise: models.BirthdaySurprise) -> dict:
     """Serialize full BirthdaySurprise including has_password indicator."""
     return {
@@ -217,7 +253,11 @@ def health_check():
 # MODULE 1 & 6: BIRTHDAY SURPRISE CRUD
 # ==========================================
 @app.post("/api/birthday/create", response_model=schemas.BirthdaySurpriseOut, status_code=status.HTTP_201_CREATED)
-def create_birthday_surprise(surprise_in: schemas.BirthdaySurpriseCreate, db: Session = Depends(get_db)):
+def create_birthday_surprise(
+    surprise_in: schemas.BirthdaySurpriseCreate, 
+    current_user: Optional[models.User] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db)
+):
     """Create a new birthday surprise experience with custom theme, voice message, wishes, and memories."""
     slug = generate_secure_slug(surprise_in.recipient_name)
     while db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.unique_slug == slug).first():
@@ -234,8 +274,10 @@ def create_birthday_surprise(surprise_in: schemas.BirthdaySurpriseCreate, db: Se
         except Exception:
             exp_date = None
 
+    creator_identifier = f"user_{current_user.id}" if current_user else (surprise_in.creator_id or secrets.token_hex(16))
+
     surprise = models.BirthdaySurprise(
-        creator_id=surprise_in.creator_id or secrets.token_hex(16),
+        creator_id=creator_identifier,
         unique_slug=slug,
         recipient_name=surprise_in.recipient_name,
         sender_name=surprise_in.sender_name,
@@ -257,12 +299,13 @@ def create_birthday_surprise(surprise_in: schemas.BirthdaySurpriseCreate, db: Se
     # Add wishes
     if surprise_in.wishes:
         for w in surprise_in.wishes:
-            wish = models.BirthdayWish(
-                surprise_id=surprise.id,
-                question=w.question,
-                answer=w.answer
-            )
-            db.add(wish)
+            if w.answer and str(w.answer).strip():
+                wish = models.BirthdayWish(
+                    surprise_id=surprise.id,
+                    question=w.question,
+                    answer=w.answer
+                )
+                db.add(wish)
 
     # Add memories with persistent backup
     if surprise_in.memories:
@@ -330,22 +373,39 @@ def create_birthday_surprise(surprise_in: schemas.BirthdaySurpriseCreate, db: Se
 
     # Add Custom Theme if provided
     ct_data = surprise_in.custom_theme or schemas.CustomThemeCreate()
+    
+    anim_settings_val = ct_data.animation_settings
+    if isinstance(anim_settings_val, (dict, list)):
+        anim_settings_str = json.dumps(anim_settings_val)
+    elif isinstance(anim_settings_val, str) and anim_settings_val.strip():
+        anim_settings_str = anim_settings_val
+    else:
+        anim_settings_str = '{"balloons":true,"hearts":true,"confetti":true,"fireworks":true,"sparkles":true,"stars":true,"typewriter":true,"glow":true,"intensity":"medium"}'
+
+    custom_settings_val = ct_data.custom_settings
+    if isinstance(custom_settings_val, (dict, list)):
+        custom_settings_str = json.dumps(custom_settings_val)
+    elif isinstance(custom_settings_val, str) and custom_settings_val.strip():
+        custom_settings_str = custom_settings_val
+    else:
+        custom_settings_str = "{}"
+
     custom_theme = models.CustomTheme(
         surprise_id=surprise.id,
-        theme_name=ct_data.theme_name,
-        primary_color=ct_data.primary_color,
-        secondary_color=ct_data.secondary_color,
-        background_color=ct_data.background_color,
-        text_color=ct_data.text_color,
-        accent_color=ct_data.accent_color,
-        card_background=ct_data.card_background,
-        heading_font=ct_data.heading_font,
-        body_font=ct_data.body_font,
-        background_type=ct_data.background_type,
-        background_value=ct_data.background_value,
-        animation_settings=ct_data.animation_settings or '{"balloons":true,"hearts":true,"confetti":true,"fireworks":true,"sparkles":true,"stars":true,"typewriter":true,"glow":true,"intensity":"medium"}',
+        theme_name=ct_data.theme_name or "dark-galaxy",
+        primary_color=ct_data.primary_color or "#E85B32",
+        secondary_color=ct_data.secondary_color or "#FFBFA8",
+        background_color=ct_data.background_color or "#170D2D",
+        text_color=ct_data.text_color or "#FFFFFF",
+        accent_color=ct_data.accent_color or "#FFD166",
+        card_background=ct_data.card_background or "rgba(255, 255, 255, 0.08)",
+        heading_font=ct_data.heading_font or "Playfair Display",
+        body_font=ct_data.body_font or "Poppins",
+        background_type=ct_data.background_type or "starry",
+        background_value=ct_data.background_value or "radial-gradient(circle at 50% 20%, #2b1055 0%, #170d2d 100%)",
+        animation_settings=anim_settings_str,
         music_url=ct_data.music_url or "happy-birthday",
-        custom_settings=ct_data.custom_settings or "{}"
+        custom_settings=custom_settings_str
     )
     db.add(custom_theme)
 
@@ -432,6 +492,8 @@ def update_birthday_surprise(id: int, update_data: schemas.BirthdaySurpriseUpdat
             db.add(ct)
         for k, v in ct_dict.items():
             if hasattr(ct, k) and v is not None:
+                if k in ("animation_settings", "custom_settings") and isinstance(v, (dict, list)):
+                    v = json.dumps(v)
                 setattr(ct, k, v)
 
     surprise.updated_at = datetime.datetime.utcnow()
@@ -452,14 +514,86 @@ def delete_birthday_surprise(id: int, db: Session = Depends(get_db)):
 
 
 # ==========================================
+# AUTHENTICATION ENDPOINTS
+# ==========================================
+@app.post("/api/auth/register", response_model=schemas.AuthResponse)
+def register_user(payload: schemas.UserRegister, db: Session = Depends(get_db)):
+    """Register a new creator account."""
+    email_clean = payload.email.lower().strip()
+    existing = db.query(models.User).filter(models.User.email == email_clean).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="An account with this email already exists. Please log in.")
+    
+    pwd_hash = hash_password(payload.password)
+    user = models.User(
+        name=payload.name.strip(),
+        email=email_clean,
+        password_hash=pwd_hash
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = create_user_token(user.id)
+    return {
+        "token": token,
+        "user": user,
+        "message": f"Welcome, {user.name}! Your account has been created ✨"
+    }
+
+
+@app.post("/api/auth/login", response_model=schemas.AuthResponse)
+def login_user(payload: schemas.UserLogin, db: Session = Depends(get_db)):
+    """Log in to an existing creator account."""
+    email_clean = payload.email.lower().strip()
+    user = db.query(models.User).filter(models.User.email == email_clean).first()
+    if not user or not user.password_hash or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password. Please try again.")
+
+    token = create_user_token(user.id)
+    return {
+        "token": token,
+        "user": user,
+        "message": f"Welcome back, {user.name}! ✨"
+    }
+
+
+@app.get("/api/auth/me")
+def get_auth_me(user: Optional[models.User] = Depends(get_current_user_optional)):
+    """Verify session token and retrieve current user."""
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return {
+        "user": {
+            "id": user.id,
+            "name": user.name,
+            "email": user.email,
+            "created_at": user.created_at
+        }
+    }
+
+
+# ==========================================
 # CREATOR DASHBOARD: LIST SURPRISES
 # ==========================================
 @app.get("/api/creator/surprises", response_model=List[schemas.BirthdaySurpriseOut])
-def get_creator_surprises(creator_id: Optional[str] = None, db: Session = Depends(get_db)):
+def get_creator_surprises(
+    creator_id: Optional[str] = None, 
+    current_user: Optional[models.User] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db)
+):
     """List surprises created by this creator (or all recent if creator_id not passed)."""
     query = db.query(models.BirthdaySurprise)
+
+    user_identifiers = []
+    if current_user:
+        user_identifiers.append(f"user_{current_user.id}")
+        user_identifiers.append(current_user.email)
     if creator_id:
-        surprises = query.filter(models.BirthdaySurprise.creator_id == creator_id).order_by(desc(models.BirthdaySurprise.created_at)).all()
+        user_identifiers.append(creator_id)
+
+    if user_identifiers:
+        surprises = query.filter(models.BirthdaySurprise.creator_id.in_(user_identifiers)).order_by(desc(models.BirthdaySurprise.created_at)).all()
         if not surprises:
             # Fallback to latest so creators never lose work across browser restarts
             surprises = query.order_by(desc(models.BirthdaySurprise.created_at)).limit(20).all()
