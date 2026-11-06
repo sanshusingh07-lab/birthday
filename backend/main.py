@@ -16,13 +16,13 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
-from database import engine, Base, get_db
+from database import engine, Base, get_db, run_auto_migrations
 import models
 import schemas
 from ai_service import generate_letter_with_ai, READY_MADE_WISHES
 
-# Ensure database tables exist
-Base.metadata.create_all(bind=engine)
+# Ensure database tables and columns exist across Render/PostgreSQL/SQLite
+run_auto_migrations(engine)
 
 # Upload directory
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
@@ -259,179 +259,188 @@ def create_birthday_surprise(
     db: Session = Depends(get_db)
 ):
     """Create a new birthday surprise experience with custom theme, voice message, wishes, and memories."""
-    slug = generate_secure_slug(surprise_in.recipient_name)
-    while db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.unique_slug == slug).first():
+    try:
         slug = generate_secure_slug(surprise_in.recipient_name)
+        while db.query(models.BirthdaySurprise).filter(models.BirthdaySurprise.unique_slug == slug).first():
+            slug = generate_secure_slug(surprise_in.recipient_name)
 
-    # Password hashing if provided
-    pwd_hash = hash_password(surprise_in.password) if surprise_in.password else None
-    
-    # Expiry parsing if provided
-    exp_date = None
-    if surprise_in.expires_at:
-        try:
-            exp_date = datetime.datetime.fromisoformat(surprise_in.expires_at.replace("Z", "+00:00"))
-        except Exception:
-            exp_date = None
+        # Password hashing if provided
+        pwd_hash = hash_password(surprise_in.password) if surprise_in.password else None
+        
+        # Expiry parsing if provided
+        exp_date = None
+        if surprise_in.expires_at:
+            try:
+                exp_date = datetime.datetime.fromisoformat(surprise_in.expires_at.replace("Z", "+00:00"))
+            except Exception:
+                exp_date = None
 
-    creator_identifier = f"user_{current_user.id}" if current_user else (surprise_in.creator_id or secrets.token_hex(16))
+        creator_identifier = f"user_{current_user.id}" if current_user else (surprise_in.creator_id or secrets.token_hex(16))
 
-    surprise = models.BirthdaySurprise(
-        creator_id=creator_identifier,
-        unique_slug=slug,
-        recipient_name=surprise_in.recipient_name,
-        sender_name=surprise_in.sender_name,
-        relationship=surprise_in.relationship,
-        birth_date=surprise_in.birth_date,
-        celebration_date=surprise_in.celebration_date,
-        birthday_message=surprise_in.birthday_message,
-        birthday_letter=surprise_in.birthday_letter,
-        status="published",
-        visibility=surprise_in.visibility or ("password_protected" if pwd_hash else "unlisted"),
-        password_hash=pwd_hash,
-        expires_at=exp_date,
-        is_active=True,
-        view_count=0
-    )
-    db.add(surprise)
-    db.flush()
+        surprise = models.BirthdaySurprise(
+            creator_id=creator_identifier,
+            unique_slug=slug,
+            recipient_name=surprise_in.recipient_name,
+            sender_name=surprise_in.sender_name,
+            relationship=surprise_in.relationship,
+            birth_date=surprise_in.birth_date,
+            celebration_date=surprise_in.celebration_date,
+            birthday_message=surprise_in.birthday_message,
+            birthday_letter=surprise_in.birthday_letter,
+            status="published",
+            visibility=surprise_in.visibility or ("password_protected" if pwd_hash else "unlisted"),
+            password_hash=pwd_hash,
+            expires_at=exp_date,
+            is_active=True,
+            view_count=0
+        )
+        db.add(surprise)
+        db.flush()
 
-    # Add wishes
-    if surprise_in.wishes:
-        for w in surprise_in.wishes:
-            if w.answer and str(w.answer).strip():
-                wish = models.BirthdayWish(
+        # Add wishes
+        if surprise_in.wishes:
+            for w in surprise_in.wishes:
+                if w.answer and str(w.answer).strip():
+                    wish = models.BirthdayWish(
+                        surprise_id=surprise.id,
+                        question=w.question,
+                        answer=w.answer
+                    )
+                    db.add(wish)
+
+        # Add memories with persistent backup
+        if surprise_in.memories:
+            for m in surprise_in.memories:
+                img_url = m.image_url
+                img_data = getattr(m, 'image_data', None)
+                if img_url and img_url.startswith("data:image"):
+                    ext = ".png" if "data:image/png" in img_url else ".webp" if "data:image/webp" in img_url else ".jpg"
+                    fname = f"memory_b64_{uuid.uuid4().hex[:10]}{ext}"
+                    b64_content = img_url.split(",", 1)[1] if "," in img_url else img_url
+                    try:
+                        raw_b = base64.b64decode(b64_content)
+                        save_persistent_media(fname, "image", f"image/{ext.lstrip('.')}", raw_b, db)
+                        img_url = f"/uploads/{fname}"
+                        img_data = b64_content
+                    except Exception as e:
+                        print(f"Error persisting base64 memory image: {e}")
+                elif img_url and img_url.startswith("/uploads/"):
+                    fname = os.path.basename(img_url)
+                    pm = db.query(models.PersistentMedia).filter(models.PersistentMedia.filename == fname).first()
+                    if pm:
+                        img_data = pm.data_base64
+
+                memory = models.Memory(
                     surprise_id=surprise.id,
-                    question=w.question,
-                    answer=w.answer
+                    image_url=img_url,
+                    image_data=img_data,
+                    caption=m.caption
                 )
-                db.add(wish)
+                db.add(memory)
 
-    # Add memories with persistent backup
-    if surprise_in.memories:
-        for m in surprise_in.memories:
-            img_url = m.image_url
-            img_data = getattr(m, 'image_data', None)
-            if img_url and img_url.startswith("data:image"):
-                ext = ".png" if "data:image/png" in img_url else ".webp" if "data:image/webp" in img_url else ".jpg"
-                fname = f"memory_b64_{uuid.uuid4().hex[:10]}{ext}"
-                b64_content = img_url.split(",", 1)[1] if "," in img_url else img_url
+        # Add Voice Message if provided with persistent backup
+        if surprise_in.voice_message:
+            aud_url = surprise_in.voice_message.audio_url
+            aud_data = getattr(surprise_in.voice_message, 'audio_data', None)
+            aud_format = surprise_in.voice_message.audio_format or "audio/webm"
+
+            if aud_url and aud_url.startswith("data:audio"):
+                ext = ".mp4" if "mp4" in aud_url or "m4a" in aud_url else ".webm"
+                fname = f"voice_b64_{uuid.uuid4().hex[:10]}{ext}"
+                b64_content = aud_url.split(",", 1)[1] if "," in aud_url else aud_url
                 try:
                     raw_b = base64.b64decode(b64_content)
-                    save_persistent_media(fname, "image", f"image/{ext.lstrip('.')}", raw_b, db)
-                    img_url = f"/uploads/{fname}"
-                    img_data = b64_content
+                    save_persistent_media(fname, "voice", aud_format, raw_b, db)
+                    aud_url = f"/uploads/voice/{fname}"
+                    aud_data = b64_content
                 except Exception as e:
-                    print(f"Error persisting base64 memory image: {e}")
-            elif img_url and img_url.startswith("/uploads/"):
-                fname = os.path.basename(img_url)
+                    print(f"Error persisting base64 voice message: {e}")
+            elif aud_url and aud_url.startswith("/uploads/"):
+                fname = os.path.basename(aud_url)
                 pm = db.query(models.PersistentMedia).filter(models.PersistentMedia.filename == fname).first()
                 if pm:
-                    img_data = pm.data_base64
+                    aud_data = pm.data_base64
 
-            memory = models.Memory(
+            vm = models.VoiceMessage(
                 surprise_id=surprise.id,
-                image_url=img_url,
-                image_data=img_data,
-                caption=m.caption
+                audio_url=aud_url,
+                audio_data=aud_data,
+                audio_format=aud_format,
+                duration=surprise_in.voice_message.duration or 0.0,
+                title=surprise_in.voice_message.title or "A special voice message for you ❤️",
+                cover_image_url=surprise_in.voice_message.cover_image_url
             )
-            db.add(memory)
+            db.add(vm)
 
-    # Add Voice Message if provided with persistent backup
-    if surprise_in.voice_message:
-        aud_url = surprise_in.voice_message.audio_url
-        aud_data = getattr(surprise_in.voice_message, 'audio_data', None)
-        aud_format = surprise_in.voice_message.audio_format or "audio/webm"
+        # Add Custom Theme if provided
+        ct_data = surprise_in.custom_theme or schemas.CustomThemeCreate()
+        
+        anim_settings_val = ct_data.animation_settings
+        if isinstance(anim_settings_val, (dict, list)):
+            anim_settings_str = json.dumps(anim_settings_val)
+        elif isinstance(anim_settings_val, str) and anim_settings_val.strip():
+            anim_settings_str = anim_settings_val
+        else:
+            anim_settings_str = '{"balloons":true,"hearts":true,"confetti":true,"fireworks":true,"sparkles":true,"stars":true,"typewriter":true,"glow":true,"intensity":"medium"}'
 
-        if aud_url and aud_url.startswith("data:audio"):
-            ext = ".mp4" if "mp4" in aud_url or "m4a" in aud_url else ".webm"
-            fname = f"voice_b64_{uuid.uuid4().hex[:10]}{ext}"
-            b64_content = aud_url.split(",", 1)[1] if "," in aud_url else aud_url
-            try:
-                raw_b = base64.b64decode(b64_content)
-                save_persistent_media(fname, "voice", aud_format, raw_b, db)
-                aud_url = f"/uploads/voice/{fname}"
-                aud_data = b64_content
-            except Exception as e:
-                print(f"Error persisting base64 voice message: {e}")
-        elif aud_url and aud_url.startswith("/uploads/"):
-            fname = os.path.basename(aud_url)
-            pm = db.query(models.PersistentMedia).filter(models.PersistentMedia.filename == fname).first()
-            if pm:
-                aud_data = pm.data_base64
+        custom_settings_val = ct_data.custom_settings
+        if isinstance(custom_settings_val, (dict, list)):
+            custom_settings_str = json.dumps(custom_settings_val)
+        elif isinstance(custom_settings_val, str) and custom_settings_val.strip():
+            custom_settings_str = custom_settings_val
+        else:
+            custom_settings_str = "{}"
 
-        vm = models.VoiceMessage(
+        custom_theme = models.CustomTheme(
             surprise_id=surprise.id,
-            audio_url=aud_url,
-            audio_data=aud_data,
-            audio_format=aud_format,
-            duration=surprise_in.voice_message.duration or 0.0,
-            title=surprise_in.voice_message.title or "A special voice message for you ❤️",
-            cover_image_url=surprise_in.voice_message.cover_image_url
+            theme_name=ct_data.theme_name or "dark-galaxy",
+            primary_color=ct_data.primary_color or "#E85B32",
+            secondary_color=ct_data.secondary_color or "#FFBFA8",
+            background_color=ct_data.background_color or "#170D2D",
+            text_color=ct_data.text_color or "#FFFFFF",
+            accent_color=ct_data.accent_color or "#FFD166",
+            card_background=ct_data.card_background or "rgba(255, 255, 255, 0.08)",
+            heading_font=ct_data.heading_font or "Playfair Display",
+            body_font=ct_data.body_font or "Poppins",
+            background_type=ct_data.background_type or "starry",
+            background_value=ct_data.background_value or "radial-gradient(circle at 50% 20%, #2b1055 0%, #170d2d 100%)",
+            animation_settings=anim_settings_str,
+            music_url=ct_data.music_url or "happy-birthday",
+            custom_settings=custom_settings_str
         )
-        db.add(vm)
+        db.add(custom_theme)
 
-    # Add Custom Theme if provided
-    ct_data = surprise_in.custom_theme or schemas.CustomThemeCreate()
-    
-    anim_settings_val = ct_data.animation_settings
-    if isinstance(anim_settings_val, (dict, list)):
-        anim_settings_str = json.dumps(anim_settings_val)
-    elif isinstance(anim_settings_val, str) and anim_settings_val.strip():
-        anim_settings_str = anim_settings_val
-    else:
-        anim_settings_str = '{"balloons":true,"hearts":true,"confetti":true,"fireworks":true,"sparkles":true,"stars":true,"typewriter":true,"glow":true,"intensity":"medium"}'
+        # Legacy Setting support
+        setting = models.Setting(
+            surprise_id=surprise.id,
+            music_enabled=True,
+            selected_theme=ct_data.theme_name,
+            animation_enabled=True,
+            selected_music=ct_data.music_url or "happy-birthday"
+        )
+        db.add(setting)
 
-    custom_settings_val = ct_data.custom_settings
-    if isinstance(custom_settings_val, (dict, list)):
-        custom_settings_str = json.dumps(custom_settings_val)
-    elif isinstance(custom_settings_val, str) and custom_settings_val.strip():
-        custom_settings_str = custom_settings_val
-    else:
-        custom_settings_str = "{}"
+        # Create initial ShareLink entry
+        share_link = models.ShareLink(
+            surprise_id=surprise.id,
+            unique_slug=slug,
+            is_active=True,
+            password_protected=bool(pwd_hash),
+            expires_at=exp_date
+        )
+        db.add(share_link)
 
-    custom_theme = models.CustomTheme(
-        surprise_id=surprise.id,
-        theme_name=ct_data.theme_name or "dark-galaxy",
-        primary_color=ct_data.primary_color or "#E85B32",
-        secondary_color=ct_data.secondary_color or "#FFBFA8",
-        background_color=ct_data.background_color or "#170D2D",
-        text_color=ct_data.text_color or "#FFFFFF",
-        accent_color=ct_data.accent_color or "#FFD166",
-        card_background=ct_data.card_background or "rgba(255, 255, 255, 0.08)",
-        heading_font=ct_data.heading_font or "Playfair Display",
-        body_font=ct_data.body_font or "Poppins",
-        background_type=ct_data.background_type or "starry",
-        background_value=ct_data.background_value or "radial-gradient(circle at 50% 20%, #2b1055 0%, #170d2d 100%)",
-        animation_settings=anim_settings_str,
-        music_url=ct_data.music_url or "happy-birthday",
-        custom_settings=custom_settings_str
-    )
-    db.add(custom_theme)
-
-    # Legacy Setting support
-    setting = models.Setting(
-        surprise_id=surprise.id,
-        music_enabled=True,
-        selected_theme=ct_data.theme_name,
-        animation_enabled=True,
-        selected_music=ct_data.music_url or "happy-birthday"
-    )
-    db.add(setting)
-
-    # Create initial ShareLink entry
-    share_link = models.ShareLink(
-        surprise_id=surprise.id,
-        unique_slug=slug,
-        is_active=True,
-        password_protected=bool(pwd_hash),
-        expires_at=exp_date
-    )
-    db.add(share_link)
-
-    db.commit()
-    db.refresh(surprise)
-    return serialize_surprise_out(surprise)
+        db.commit()
+        db.refresh(surprise)
+        return serialize_surprise_out(surprise)
+    except Exception as e:
+        db.rollback()
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Could not create birthday surprise: {str(e)}"
+        )
 
 
 @app.get("/api/birthday/{id}", response_model=schemas.BirthdaySurpriseOut)

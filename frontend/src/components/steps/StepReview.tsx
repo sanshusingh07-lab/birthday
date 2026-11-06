@@ -374,6 +374,16 @@ export const StepReview: React.FC = () => {
 
       {/* Prominent CTA: Create The Magic ✨ */}
       <div className="text-center">
+        {error && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-5 max-w-lg mx-auto p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-sm font-medium flex items-center justify-center gap-2 shadow-sm"
+          >
+            <span>⚠️ {error}</span>
+          </motion.div>
+        )}
+
         <button
           type="button"
           onClick={handleCreateMagic}

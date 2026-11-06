@@ -143,10 +143,12 @@ export async function createSurprise(data: BirthdayFormData): Promise<BirthdaySu
     birthday_message: data.birthday_message || null,
     birthday_letter: data.birthday_letter || null,
     wishes: (data.wishes || []).filter(w => w && w.answer && typeof w.answer === 'string' && w.answer.trim().length > 0),
-    memories: (data.memories || []).map(m => ({
-      image_url: m.image_url,
-      caption: m.caption || null
-    })),
+    memories: (data.memories || [])
+      .filter(m => m && m.image_url && typeof m.image_url === 'string' && m.image_url.trim().length > 0)
+      .map(m => ({
+        image_url: m.image_url,
+        caption: m.caption || null
+      })),
     voice_message: data.voice_message || null,
     custom_theme: data.custom_theme ? {
       ...data.custom_theme,
@@ -167,7 +169,15 @@ export async function createSurprise(data: BirthdayFormData): Promise<BirthdaySu
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Failed to create surprise' }));
-    throw new Error(err.detail || 'Failed to create birthday surprise');
+    let errorMsg = 'Failed to create birthday surprise';
+    if (typeof err.detail === 'string') {
+      errorMsg = err.detail;
+    } else if (Array.isArray(err.detail)) {
+      errorMsg = err.detail.map((d: any) => d.msg || JSON.stringify(d)).join('; ');
+    } else if (err.message) {
+      errorMsg = err.message;
+    }
+    throw new Error(errorMsg);
   }
 
   const created: BirthdaySurprise = await res.json();

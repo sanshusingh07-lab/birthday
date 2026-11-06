@@ -303,7 +303,9 @@ export const BirthdayProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
       return created;
     } catch (err: any) {
-      setError(err.message || 'Something went wrong while creating the surprise.');
+      console.error("Create surprise failed:", err);
+      const msg = err.message || 'Something went wrong while creating the surprise.';
+      setError(msg);
       throw err;
     } finally {
       setIsSubmitting(false);
